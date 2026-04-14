@@ -224,7 +224,7 @@ int main(int argc, char * argv[])
         zedQuality,     // depth quality
         0,              // sensingMode = STANDARD
         100,            // confidenceThr (max = no filtering)
-        false,          // computeOdometry = false (we use RTAB-Map odom)
+        true,           // computeOdometry = true (use ZED SDK VIO pose)
         0.0f,           // imageRate = 0 (as fast as possible)
         Transform::getIdentity(),
         true,           // selfCalibration
@@ -261,9 +261,6 @@ int main(int argc, char * argv[])
     Parameters::parse(parameters, Parameters::kOdomStrategy(), odomStrategy);
     Parameters::parse(parameters, Parameters::kRtabmapDetectionRate(), detectionRate);
     Parameters::parse(parameters, Parameters::kRtabmapCreateIntermediateNodes(), intermediateNodes);
-
-    ParametersMap odomParameters = parameters;
-    Odometry * odom = Odometry::create(odomParameters);
 
     Rtabmap rtabmap;
     rtabmap.init(parameters, databasePath);
@@ -350,14 +347,15 @@ int main(int argc, char * argv[])
         cameraThread.postUpdate(&data, &cameraInfo);
         cameraInfo.timeTotal = timer.ticks();
 
-        // Compute visual odometry
+        // Use ZED SDK VIO pose directly (bypasses RTAB-Map F2M odometry)
         OdometryInfo odomInfo;
-        Transform pose = odom->process(data, &odomInfo);
-
-        if(odomInfo.keyFrameAdded)
+        Transform pose = cameraInfo.odomPose;
+        if(!pose.isNull())
         {
+            odomInfo.keyFrameAdded = true;
             ++odomKeyFrames;
         }
+        odomInfo.reg.inliers = 100;
 
         // Rate limiting
         bool processData = true;
@@ -385,8 +383,15 @@ int main(int argc, char * argv[])
         timer.restart();
         if(processData)
         {
+            // Guarantee a valid 6x6 CV_64FC1 covariance (required by RTAB-Map)
+            cv::Mat covariance = cameraInfo.odomCovariance;
+            if(covariance.empty() || covariance.cols != 6 || covariance.rows != 6 || covariance.type() != CV_64FC1)
+            {
+                // ZED SDK VIO pose is trusted: use a small identity covariance
+                covariance = cv::Mat::eye(6, 6, CV_64FC1) * 0.0001;
+            }
             OdometryEvent e(SensorData(), Transform(), odomInfo);
-            rtabmap.process(data, pose, odomInfo.reg.covariance,
+            rtabmap.process(data, pose, covariance,
                             e.velocity());
 
             if(rtabmap.getLoopClosureId() > 0)
@@ -433,7 +438,6 @@ int main(int argc, char * argv[])
         data = cameraThread.camera()->takeImage(&cameraInfo);
     }
 
-    delete odom;
     double elapsed = totalTime.ticks();
 
     printf("\n\nProcessing complete.\n");

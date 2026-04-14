@@ -273,12 +273,20 @@ def main() -> None:
     if not args.skip_slam:
         rtabmap_cmd = build_rtabmap_cmd(svo_filename, "/output",
                                          args.trim_start, args.trim_end)
+        # Fast-iteration override: if a locally compiled binary exists, mount it
+        # over the container's binary so docker build is not required.
+        local_bin = Path(__file__).parent / "tools_patch/ZedSvo/build/zed_svo"
+        slam_extra = None
+        if local_bin.is_file():
+            print(f"[INFO] Using local binary: {local_bin}")
+            slam_extra = ["-v", f"{local_bin}:/usr/local/bin/rtabmap-zed_svo:ro"]
         run_step(
             image=args.image,
             data_host=data_host,
             output_host=output_host,
             cmd_in_container=rtabmap_cmd,
-            description="Step 1/2 – rtabmap-zed_svo: RGBD-SLAM (ZED SDK + F2M odom)",
+            description="Step 1/2 – rtabmap-zed_svo: RGBD-SLAM (ZED SDK VIO)",
+            extra_docker_args=slam_extra,
         )
         db_path = Path(output_host) / "rtabmap.db"
         if not db_path.is_file():
