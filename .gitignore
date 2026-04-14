@@ -1,0 +1,9 @@
+*.svo
+*.svo2
+*.db
+*.ply
+*.obj
+*.mtl
+__pycache__/
+test_01/
+bureau_01/

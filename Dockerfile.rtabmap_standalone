@@ -1,0 +1,124 @@
+# =============================================================================
+# RTAB-Map Standalone – ARM64 (Jetson Orin, JetPack 6, L4T 36.4)
+# Compiles rtabmap from source with ZED SDK support.  No ROS dependency.
+# =============================================================================
+#
+# Base image: Stereolabs ZED developer image – ZED SDK 5.2, L4T r36.4 (JetPack 6.1)
+#   • Includes: CUDA 12.6, cuDNN, TensorRT, ZED SDK 5.2 (NEURAL depth models), OpenCV
+#   • Architecture: linux/arm64 (aarch64) – Jetson Orin, JetPack 6.1
+#   • tools-devel: full SDK + ZED diagnostic tools (required for NEURAL depth inference)
+#
+# Available Jetson/L4T tags (from hub.docker.com/r/stereolabs/zed/tags):
+#   5.2-tools-devel-l4t-r36.4   ← used here (JetPack 6.1 / L4T 36.4)
+#   5.2-tools-devel-jetson-jp6.1.0
+#   5.2-devel-l4t-r36.4
+
+FROM stereolabs/zed:5.2-tools-devel-l4t-r36.4
+
+LABEL maintainer="VISTA Project" \
+      description="RTAB-Map standalone (no ROS) with ZED SDK for offline SVO processing" \
+      architecture="arm64/aarch64 – Jetson Orin JetPack 6"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
+
+# ---------------------------------------------------------------------------
+# 1. System dependencies required to build RTAB-Map
+#    (OpenCV and ZED SDK are already provided by the base image)
+# ---------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build essentials
+    build-essential \
+    cmake \
+    git \
+    pkg-config \
+    # Point Cloud Library (PCL) + Eigen
+    # libvtk7-dev is Ubuntu 20.04 only; Ubuntu 22.04 ships VTK 9
+    libpcl-dev \
+    libeigen3-dev \
+    libvtk9-dev \
+    libflann-dev \
+    # Boost
+    libboost-all-dev \
+    # SQLite (RTAB-Map database storage)
+    libsqlite3-dev \
+    # Qt5 (optional but required for rtabmap-databaseViewer)
+    qtbase5-dev \
+    libqt5sql5-sqlite \
+    # g2o: libg2o-dev is NOT in Ubuntu 22.04 ARM64 repos.
+    # RTAB-Map bundles its own g2o internally; no external package needed.
+    # Misc
+    libyaml-cpp-dev \
+    libzip-dev \
+    locales \
+    && locale-gen en_US.UTF-8 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# 2. Build RTAB-Map from source with ZED support (no ROS)
+#    ZED SDK is installed in /usr/local/zed by the base image.
+# ---------------------------------------------------------------------------
+ARG RTABMAP_VERSION=0.21.4
+ARG RTABMAP_SRC=/opt/rtabmap_src
+ARG RTABMAP_BUILD=/opt/rtabmap_build
+
+RUN git clone --depth 1 --branch ${RTABMAP_VERSION} \
+    https://github.com/introlab/rtabmap.git ${RTABMAP_SRC}
+
+# ---------------------------------------------------------------------------
+# 2b. Inject custom tool: rtabmap-zed_svo (offline RGBD-SLAM from ZED SVO)
+#     This tool uses CameraStereoZed + RTAB-Map odometry + SLAM, unlike
+#     rtabmap-console which only does visual bag-of-words (no depth/odom).
+# ---------------------------------------------------------------------------
+COPY tools_patch/ZedSvo/ ${RTABMAP_SRC}/tools/ZedSvo/
+RUN echo 'ADD_SUBDIRECTORY( ZedSvo )' >> ${RTABMAP_SRC}/tools/CMakeLists.txt
+
+RUN mkdir -p ${RTABMAP_BUILD} && cd ${RTABMAP_BUILD} && \
+    cmake ${RTABMAP_SRC} \
+        # --- Core options ---
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        # --- Linker flags: allow unresolved L4T BSP symbols at build time
+        # (libcuda.so.1, libnvbufsurface, libnvargus etc. live on the Jetson
+        #  host and are injected at runtime by the NVIDIA container runtime)
+        -DCMAKE_EXE_LINKER_FLAGS="-Wl,--allow-shlib-undefined" \
+        -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--allow-shlib-undefined" \
+        # --- ZED SDK integration ---
+        -DWITH_ZED=ON \
+        -DZED_INCLUDE_DIRS=/usr/local/zed/include \
+        -DZED_LIBRARIES=/usr/local/zed/lib/libsl_zed.so \
+        # --- Disable ROS entirely ---
+        -DWITH_ROS=OFF \
+        # --- Point Cloud Library ---
+        -DWITH_PCL=ON \
+        # --- g2o: not packaged for Ubuntu 22.04 ARM64; use TORO (built-in)
+        -DWITH_G2O=OFF \
+        # --- Optional extras (disable to speed up build) ---
+        -DWITH_GTSAM=OFF \
+        -DWITH_ORB_OCTREE=OFF \
+        -DWITH_TORCH=OFF \
+        -DWITH_PYTHON=OFF \
+        -DBUILD_APP=ON \
+    && make -j$(nproc) \
+    && make install \
+    && ldconfig \
+    && rm -rf ${RTABMAP_SRC} ${RTABMAP_BUILD}
+
+# ---------------------------------------------------------------------------
+# 3. Working directories
+# ---------------------------------------------------------------------------
+RUN mkdir -p /data /output
+
+WORKDIR /output
+
+# Note: cannot run `rtabmap --version` at build time because libcuda.so.1
+# is a host-side L4T library injected by the NVIDIA runtime at container
+# run time only.  Verify after build with:
+#   sudo docker run --rm --runtime=nvidia --gpus all \
+#     -e QT_QPA_PLATFORM=offscreen \
+#     rtabmap_standalone:latest rtabmap --version
+
+# Default entrypoint – overridden by process_svo.py when running a container
+CMD ["bash"]
