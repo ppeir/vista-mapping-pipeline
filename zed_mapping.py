@@ -1,13 +1,21 @@
 import sys
+import argparse
 import pyzed.sl as sl
 
 def main():
-    if len(sys.argv) != 3:
-        print("Usage: python3 zed_mapping.py <input.svo2> <output_map.ply>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="ZED SDK native spatial mapping from SVO2")
+    parser.add_argument("svo", help="Input SVO2 file path")
+    parser.add_argument("output", help="Output PLY file path")
+    parser.add_argument("--trim-start", type=float, default=0.0, metavar="SEC",
+                        help="Skip first N seconds of the recording")
+    parser.add_argument("--trim-end", type=float, default=0.0, metavar="SEC",
+                        help="Stop N seconds before the end of the recording")
+    parser.add_argument("--map-type", choices=["cloud", "mesh"], default="mesh",
+                        help="Output map type: cloud (fused point cloud) or mesh (default: mesh)")
+    args = parser.parse_args()
 
-    svo_path = sys.argv[1]
-    output_path = sys.argv[2]
+    svo_path = args.svo
+    output_path = args.output
 
     # 1. Initialisation de la caméra en mode lecture SVO
     zed = sl.Camera()
@@ -33,9 +41,8 @@ def main():
     # 3. Activation du Spatial Mapping
     mapping_params = sl.SpatialMappingParameters()
     
-    # Choix du type de carte : FUSED_POINT_CLOUD (pour comparer avec le .ply de RTAB-Map)
-    # Vous pouvez changer pour sl.SPATIAL_MAP_TYPE.MESH pour obtenir un maillage 3D surfacique
-    mapping_params.map_type = sl.SPATIAL_MAP_TYPE.FUSED_POINT_CLOUD
+    mapping_params.map_type = sl.SPATIAL_MAP_TYPE.MESH if args.map_type == "mesh" else sl.SPATIAL_MAP_TYPE.FUSED_POINT_CLOUD
+    print(f"[INFO] Map type: {args.map_type}")
     
     # Résolution spatiale (0.05m = 5cm, correspond à ce que vous aviez mis dans RTAB-Map)
     mapping_params.resolution_meter = 0.05 
@@ -46,10 +53,27 @@ def main():
         sys.exit(1)
 
     # 4. Lecture de la vidéo et construction de la carte
+    fps = zed.get_camera_information().camera_configuration.fps
+    if fps <= 0:
+        fps = 30.0
+    trim_start_frames = int(args.trim_start * fps)
+    # Total frame count to compute trim-end
+    total_frames = zed.get_svo_number_of_frames()
+    trim_end_frame = total_frames - int(args.trim_end * fps) if args.trim_end > 0 else total_frames
+
+    if trim_start_frames > 0:
+        print(f"[INFO] Skipping first {args.trim_start}s (~{trim_start_frames} frames)...")
+        zed.set_svo_position(trim_start_frames)
+
     print("[INFO] Traitement des frames en cours (cela peut prendre quelques minutes)...")
     frames_processed = 0
-    
+
     while True:
+        current_pos = zed.get_svo_position()
+        if current_pos >= trim_end_frame:
+            print(f"[INFO] Trim-end atteint à la frame {current_pos}.")
+            break
+
         err = zed.grab()
         if err == sl.ERROR_CODE.SUCCESS:
             frames_processed += 1
@@ -77,7 +101,7 @@ def main():
         print("[INFO] Filtrage du maillage...")
         mesh.filter(sl.MeshFilterParameters()) # Lisse et supprime les artefacts
         print(f"[INFO] Sauvegarde du maillage vers {output_path}...")
-        mesh.save(output_path)
+        mesh.save(output_path, sl.MESH_FILE_FORMAT.PLY)
 
     # 6. Libération des ressources
     zed.disable_spatial_mapping()
