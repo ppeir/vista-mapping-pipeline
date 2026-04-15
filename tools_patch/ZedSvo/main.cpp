@@ -54,6 +54,8 @@ void showUsage()
         "  --skip <N>             Skip N frames between processed frames (default: 0)\n"
         "  --trim-start <sec>     Trim first <sec> seconds from the SVO (default: 0)\n"
         "  --trim-end <sec>       Trim last <sec> seconds from the SVO (default: 0)\n"
+        "  --confidence <0-100>   ZED depth confidence threshold (default: 10, lower=stricter)\n"
+        "  --textureness <0-100>  ZED textureness confidence threshold (default: 90)\n"
         "  --quiet                Suppress per-iteration output\n"
         "%s\n"
         "Example:\n\n"
@@ -96,6 +98,8 @@ int main(int argc, char * argv[])
     int skipFrames  = 0;
     float trimStart = 0.0f;  // seconds to trim from beginning
     float trimEnd   = 0.0f;  // seconds to trim from end
+    int confidenceThr = 100; // ZED depth confidence (0-100, lower=stricter)
+    int texturenessThr = 90; // ZED textureness confidence (0-100)
     bool quiet      = false;
 
     // --- Parse custom options (before Parameters::parseArguments) ---
@@ -127,6 +131,18 @@ int main(int argc, char * argv[])
         {
             trimEnd = std::atof(argv[++i]);
             if(trimEnd < 0) trimEnd = 0;
+        }
+        else if(std::strcmp(argv[i], "--confidence") == 0 && i+1 < argc)
+        {
+            confidenceThr = std::atoi(argv[++i]);
+            if(confidenceThr < 0) confidenceThr = 0;
+            if(confidenceThr > 100) confidenceThr = 100;
+        }
+        else if(std::strcmp(argv[i], "--textureness") == 0 && i+1 < argc)
+        {
+            texturenessThr = std::atoi(argv[++i]);
+            if(texturenessThr < 0) texturenessThr = 0;
+            if(texturenessThr > 100) texturenessThr = 100;
         }
         else if(std::strcmp(argv[i], "--quiet") == 0)
         {
@@ -200,6 +216,8 @@ int main(int argc, char * argv[])
         zedQuality==2?"QUALITY":
         zedQuality==3?"NEURAL":"UNKNOWN");
     printf("  Skip frames   : %d\n", skipFrames);
+    printf("  Confidence    : %d\n", confidenceThr);
+    printf("  Textureness   : %d\n", texturenessThr);
     if(trimStart > 0.0f || trimEnd > 0.0f)
     {
         printf("  Trim start    : %.1fs\n", trimStart);
@@ -221,15 +239,15 @@ int main(int argc, char * argv[])
     // ------------------------------------------------------------------
     CameraStereoZed * camera = new CameraStereoZed(
         svoPath,
-        zedQuality,     // depth quality
-        0,              // sensingMode = STANDARD
-        100,            // confidenceThr (max = no filtering)
-        true,           // computeOdometry = true (use ZED SDK VIO pose)
-        0.0f,           // imageRate = 0 (as fast as possible)
+        zedQuality,       // depth quality
+        0,                // sensingMode = STANDARD
+        confidenceThr,    // depth confidence threshold
+        true,             // computeOdometry = true (use ZED SDK VIO pose)
+        0.0f,             // imageRate = 0 (as fast as possible)
         Transform::getIdentity(),
-        true,           // selfCalibration
-        false,          // odomForce3DoF
-        90              // texturenessConfidenceThr
+        true,             // selfCalibration
+        false,            // odomForce3DoF
+        texturenessThr    // textureness confidence threshold
     );
 
     CameraThread cameraThread(camera, parameters);

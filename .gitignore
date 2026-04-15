@@ -8,3 +8,6 @@ __pycache__/
 tools_patch/ZedSvo/build/
 test_01/
 bureau_01/
+bureau_*/
+*.svo
+*.svo2

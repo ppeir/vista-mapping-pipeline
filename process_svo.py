@@ -60,6 +60,7 @@ RTABMAP_PARAMS = [
     "--Mem/InitWMWithAllNodes", "true",
     "--Optimizer/Strategy", "0",    # 0=TORO (built-in); g2o unavailable on Ubuntu 22.04 ARM64
     "--OdomF2M/MaxSize", "1000",
+    "--Vis/MaxDepth", "2.0",        # ignore features beyond 2m (reduces noise)
 ]
 
 # rtabmap-export render modes
@@ -112,20 +113,24 @@ def image_exists(image: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def build_rtabmap_cmd(svo_filename: str, output_dir_in_container: str,
-                      trim_start: float = 0.0, trim_end: float = 0.0) -> list[str]:
+                      trim_start: float = 0.0, trim_end: float = 0.0,
+                      extra_params: list[str] | None = None) -> list[str]:
     """
     Build the rtabmap-zed_svo CLI command for offline RGBD-SLAM.
 
     rtabmap-zed_svo uses CameraStereoZed to open the SVO natively
     through the ZED SDK, then runs F2M visual odometry + SLAM.
     Output: <output_dir>/rtabmap.db
+
+    extra_params override RTABMAP_PARAMS defaults (last --Param wins).
     """
     cmd = (
         ["rtabmap-zed_svo"]
         + ["--output", output_dir_in_container]
         + ["--output_name", "rtabmap"]
-        + ["--quality", "1"]     # 0=NONE, 1=PERFORMANCE, 2=QUALITY, 3=NEURAL
+        + ["--quality", "3"]     # 0=NONE, 1=PERFORMANCE, 2=QUALITY, 3=NEURAL
         + RTABMAP_PARAMS
+        + (extra_params or [])
     )
     if trim_start > 0:
         cmd += ["--trim-start", str(trim_start)]
@@ -236,7 +241,11 @@ def main() -> None:
         default=0.0,
         help="Trim the last N seconds from the SVO before SLAM (default: 0).",
     )
-    args = parser.parse_args()
+    args, extra = parser.parse_known_args()
+
+    # Extra arguments are forwarded as RTAB-Map --Param value pairs
+    # Usage: python3 process_svo.py --svo ... --Vis/MaxDepth 5.0 --Grid/CellSize 0.03
+    rtabmap_extra_params = extra  # e.g. ["--Vis/MaxDepth", "5.0"]
 
     # ---- Validate inputs -----------------------------------------------
     svo_path = Path(args.svo).resolve()
@@ -272,7 +281,8 @@ def main() -> None:
     # ---- Step 1: SLAM --------------------------------------------------
     if not args.skip_slam:
         rtabmap_cmd = build_rtabmap_cmd(svo_filename, "/output",
-                                         args.trim_start, args.trim_end)
+                                         args.trim_start, args.trim_end,
+                                         rtabmap_extra_params)
         # Fast-iteration override: if a locally compiled binary exists, mount it
         # over the container's binary so docker build is not required.
         local_bin = Path(__file__).parent / "tools_patch/ZedSvo/build/zed_svo"
