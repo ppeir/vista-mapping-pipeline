@@ -57,6 +57,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
+# 1b. PyTorch for SuperPoint / SuperGlue (JetPack 6 wheels)
+# ---------------------------------------------------------------------------
+# libcusparseLt is required by the NVIDIA Jetson torch wheel but not bundled in JetPack 6.1
+RUN wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/arm64/cuda-keyring_1.1-1_all.deb \
+    && dpkg -i cuda-keyring_1.1-1_all.deb \
+    && rm cuda-keyring_1.1-1_all.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends libcusparselt0-cuda-12 python3-dev python3-pip pybind11-dev libopenblas-dev \
+    && pip3 install --no-cache-dir \
+        https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl \
+        "numpy<2" \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Make libtorch and libcusparseLt visible to the dynamic linker (both install to non-standard paths)
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/torch/lib:/usr/lib/aarch64-linux-gnu/libcusparseLt/12:${LD_LIBRARY_PATH}
+
+# ---------------------------------------------------------------------------
 # 2. Build RTAB-Map from source with ZED support (no ROS)
 #    ZED SDK is installed in /usr/local/zed by the base image.
 # ---------------------------------------------------------------------------
@@ -72,8 +89,16 @@ RUN git clone --depth 1 --branch ${RTABMAP_VERSION} \
 #     This tool uses CameraStereoZed + RTAB-Map odometry + SLAM, unlike
 #     rtabmap-console which only does visual bag-of-words (no depth/odom).
 # ---------------------------------------------------------------------------
-COPY tools_patch/ZedSvo/ ${RTABMAP_SRC}/tools/ZedSvo/
+COPY tools/ZedSvo/ ${RTABMAP_SRC}/tools/ZedSvo/
 RUN echo 'ADD_SUBDIRECTORY( ZedSvo )' >> ${RTABMAP_SRC}/tools/CMakeLists.txt
+
+# ---------------------------------------------------------------------------
+# 2c. Patch: fix SPDetector::compute() crash when only 1 keypoint detected.
+#     squeeze() removes ALL singleton dims; with 1 keypoint [1,256,1]→[256]
+#     then transpose(0,1) fails. Fix: squeeze(0) removes only batch dim.
+# ---------------------------------------------------------------------------
+RUN sed -i 's/desc\.squeeze();\s*\/\/\[256/desc.squeeze(0); \/\/[256/' \
+    ${RTABMAP_SRC}/corelib/src/superpoint_torch/SuperPoint.cc
 
 RUN mkdir -p ${RTABMAP_BUILD} && cd ${RTABMAP_BUILD} && \
     cmake ${RTABMAP_SRC} \
@@ -98,8 +123,9 @@ RUN mkdir -p ${RTABMAP_BUILD} && cd ${RTABMAP_BUILD} && \
         # --- Optional extras (disable to speed up build) ---
         -DWITH_GTSAM=OFF \
         -DWITH_ORB_OCTREE=OFF \
-        -DWITH_TORCH=OFF \
-        -DWITH_PYTHON=OFF \
+        -DWITH_TORCH=ON \
+        -DCMAKE_PREFIX_PATH=/usr/local/lib/python3.10/dist-packages/torch \
+        -DWITH_PYTHON=ON \
         -DBUILD_APP=ON \
     && make -j$(nproc) \
     && make install \
@@ -107,7 +133,18 @@ RUN mkdir -p ${RTABMAP_BUILD} && cd ${RTABMAP_BUILD} && \
     && rm -rf ${RTABMAP_SRC} ${RTABMAP_BUILD}
 
 # ---------------------------------------------------------------------------
-# 3. Working directories
+# 3. Install RTAB-Map Python matcher scripts + SuperGlue repo
+#    rtabmap_superglue.py must live at the root of SuperGluePretrainedNetwork
+#    because it does: from models.matching import SuperGlue
+#    Weights (superglue_indoor.pt) are NOT bundled; mount ./models/ at runtime.
+# ---------------------------------------------------------------------------
+RUN git clone --depth 1 https://github.com/magicleap/SuperGluePretrainedNetwork /opt/SuperGluePretrainedNetwork \
+    && mkdir -p /opt/SuperGluePretrainedNetwork/models/weights \
+    && wget -q -O /opt/SuperGluePretrainedNetwork/rtabmap_superglue.py \
+       https://raw.githubusercontent.com/introlab/rtabmap/0.21.4/corelib/src/python/rtabmap_superglue.py
+
+# ---------------------------------------------------------------------------
+# 4. Working directories
 # ---------------------------------------------------------------------------
 RUN mkdir -p /data /output
 

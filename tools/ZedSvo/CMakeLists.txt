@@ -11,8 +11,13 @@ INCLUDE_DIRECTORIES(${RTABMAP_INCLUDE_DIRS})
 # PCL + Eigen + OpenCV (required transitively by rtabmap headers)
 INCLUDE_DIRECTORIES(/usr/include/pcl-1.12 /usr/include/eigen3 /usr/include/opencv4)
 
-IF(ZED_INCLUDE_DIRS)
-    INCLUDE_DIRECTORIES(${ZED_INCLUDE_DIRS})
+IF(NOT ZED_INCLUDE_DIRS)
+    SET(ZED_INCLUDE_DIRS /usr/local/zed/include)
+ENDIF()
+INCLUDE_DIRECTORIES(${ZED_INCLUDE_DIRS})
+
+IF(NOT ZED_LIBRARIES)
+    SET(ZED_LIBRARIES /usr/local/zed/lib/libsl_zed.so)
 ENDIF()
 
 # sl/Camera.hpp includes CUDA headers (cuda.h, cuda_runtime.h)
@@ -27,6 +32,11 @@ ELSE()
 ENDIF()
 
 ADD_EXECUTABLE(zed_svo main.cpp)
+
+# L4T BSP libraries (libcuda.so.1, libnvbufsurface, libnvargus etc.) live on
+# the Jetson host and are injected at runtime by the NVIDIA container runtime.
+# Allow unresolved shared-library symbols at link time.
+TARGET_LINK_OPTIONS(zed_svo PRIVATE -Wl,--allow-shlib-undefined)
 
 TARGET_LINK_LIBRARIES(zed_svo
     rtabmap_core

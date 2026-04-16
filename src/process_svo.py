@@ -59,17 +59,34 @@ RTABMAP_PARAMS = [
     "--Mem/STMSize", "30",
     "--Mem/InitWMWithAllNodes", "true",
     "--Optimizer/Strategy", "0",    # 0=TORO (built-in); g2o unavailable on Ubuntu 22.04 ARM64
+    "--Optimizer/GravitySigma", "0", # disable gravity links – TORO doesn't support them and crashes
     "--OdomF2M/MaxSize", "1000",
     "--Vis/MaxDepth", "2.0",        # ignore features beyond 2m (reduces noise)
 ]
 
+# SuperPoint extractor + SuperGlue matcher (enabled with --superpoint)
+# Parameter names verified against RTAB-Map 0.21.4 Parameters.h:
+#   SuperPoint = Kp/DetectorStrategy 11, Vis/FeatureType 11
+#   SuperPoint model path = SuperPoint/ModelPath (NOT Kp/DictionaryPath)
+#   SuperGlue matcher = Vis/CorNNType 6 (NOT Vis/CorType 4)
+#   SuperGlue variant = PyMatcher/Model indoor|outdoor (NOT Vis/SuperGluePath)
+SUPERPOINT_PARAMS = [
+    "--Kp/DetectorStrategy", "11",
+    "--Vis/FeatureType", "11",
+    "--SuperPoint/ModelPath", "/models/superpoint_v1.pt",
+    "--Vis/CorNNType", "6",
+    "--PyMatcher/Path", "/opt/SuperGluePretrainedNetwork/rtabmap_superglue.py",
+    "--PyMatcher/Model", "indoor",
+    "--Vis/MinInliers", "15",
+]
+
 # rtabmap-export render modes
 RENDER_MODES = {
-    "cloud": [],                                          # point cloud PLY
+    "cloud": ["--cloud"],                                  # point cloud PLY
     "mesh":  ["--mesh"],                                   # triangulated mesh PLY
     "texture": ["--texture", "--texture_size", "4096"],    # textured mesh OBJ
 }
-DEFAULT_RENDER = "mesh"
+DEFAULT_RENDER = "cloud"
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +131,7 @@ def image_exists(image: str) -> bool:
 
 def build_rtabmap_cmd(svo_filename: str, output_dir_in_container: str,
                       trim_start: float = 0.0, trim_end: float = 0.0,
+                      quality: int = 3, superpoint: bool = False,
                       extra_params: list[str] | None = None) -> list[str]:
     """
     Build the rtabmap-zed_svo CLI command for offline RGBD-SLAM.
@@ -128,8 +146,9 @@ def build_rtabmap_cmd(svo_filename: str, output_dir_in_container: str,
         ["rtabmap-zed_svo"]
         + ["--output", output_dir_in_container]
         + ["--output_name", "rtabmap"]
-        + ["--quality", "3"]     # 0=NONE, 1=PERFORMANCE, 2=QUALITY, 3=NEURAL
+        + ["--quality", str(quality)]   # 0=NONE, 1=PERFORMANCE, 2=QUALITY, 3=NEURAL
         + RTABMAP_PARAMS
+        + (SUPERPOINT_PARAMS if superpoint else [])
         + (extra_params or [])
     )
     if trim_start > 0:
@@ -241,6 +260,19 @@ def main() -> None:
         default=0.0,
         help="Trim the last N seconds from the SVO before SLAM (default: 0).",
     )
+    parser.add_argument(
+        "--quality",
+        type=int,
+        default=3,
+        choices=[0, 1, 2, 3],
+        help="ZED depth quality: 0=NONE, 1=PERFORMANCE, 2=QUALITY, 3=NEURAL (default: 3).",
+    )
+    parser.add_argument(
+        "--superpoint",
+        action="store_true",
+        default=False,
+        help="Use SuperPoint extractor + SuperGlue matcher for loop closure (requires models/ and Torch-enabled image).",
+    )
     args, extra = parser.parse_known_args()
 
     # Extra arguments are forwarded as RTAB-Map --Param value pairs
@@ -282,14 +314,18 @@ def main() -> None:
     if not args.skip_slam:
         rtabmap_cmd = build_rtabmap_cmd(svo_filename, "/output",
                                          args.trim_start, args.trim_end,
+                                         args.quality, args.superpoint,
                                          rtabmap_extra_params)
         # Fast-iteration override: if a locally compiled binary exists, mount it
         # over the container's binary so docker build is not required.
-        local_bin = Path(__file__).parent / "tools_patch/ZedSvo/build/zed_svo"
-        slam_extra = None
+        local_bin = Path(__file__).resolve().parent.parent / "tools/ZedSvo/build/zed_svo"
+        slam_extra = []
+        if args.superpoint:
+            slam_extra += ["-v", f"{Path.cwd()}/models:/models:ro"]
+            slam_extra += ["-v", f"{Path.cwd()}/models/superglue_indoor.pt:/opt/SuperGluePretrainedNetwork/models/weights/superglue_indoor.pth:ro"]
         if local_bin.is_file():
             print(f"[INFO] Using local binary: {local_bin}")
-            slam_extra = ["-v", f"{local_bin}:/usr/local/bin/rtabmap-zed_svo:ro"]
+            slam_extra += ["-v", f"{local_bin}:/usr/local/bin/rtabmap-zed_svo:ro"]
         run_step(
             image=args.image,
             data_host=data_host,
@@ -317,12 +353,17 @@ def main() -> None:
     # ---- Step 2: Export 2-D occupancy map ------------------------------
     if not args.skip_export:
         export_cmd = build_export_cmd("/output", args.render)
+        export_extra = []
+        if args.superpoint:
+            export_extra += ["-v", f"{Path.cwd()}/models:/models:ro"]
+            export_extra += ["-v", f"{Path.cwd()}/models/superglue_indoor.pt:/opt/SuperGluePretrainedNetwork/models/weights/superglue_indoor.pth:ro"]
         run_step(
             image=args.image,
             data_host=data_host,
             output_host=output_host,
             cmd_in_container=export_cmd,
             description=f"Step 2/2 – rtabmap-export: {args.render} export",
+            extra_docker_args=export_extra,
         )
     else:
         print("\n[SKIP] Skipping export step (--skip-export).")
