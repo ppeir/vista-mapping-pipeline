@@ -74,6 +74,30 @@ RUN wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/torch/lib:/usr/lib/aarch64-linux-gnu/libcusparseLt/12:${LD_LIBRARY_PATH}
 
 # ---------------------------------------------------------------------------
+# 1c. Build GTSAM from source
+#     libgtsam-dev is not packaged for Ubuntu 22.04 ARM64.
+#     GTSAM 4.2.0 adds IMU preintegration + 2D/3D pose graph used by RTAB-Map.
+#     MARCH_NATIVE=OFF: Jetson Orin is ARM64, avoid architecture-specific flags.
+#     GTSAM_BUILD_TESTS/EXAMPLES=OFF: skip to reduce build time.
+# ---------------------------------------------------------------------------
+ARG GTSAM_VERSION=4.2.0
+RUN git clone --depth 1 --branch ${GTSAM_VERSION} \
+    https://github.com/borglab/gtsam.git /opt/gtsam_src \
+    && mkdir -p /opt/gtsam_build && cd /opt/gtsam_build \
+    && cmake /opt/gtsam_src \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DGTSAM_BUILD_TESTS=OFF \
+        -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
+        -DGTSAM_USE_SYSTEM_EIGEN=ON \
+        -DGTSAM_ALLOW_DEPRECATED_SINCE_V42=OFF \
+        -DMARCH_NATIVE=OFF \
+    && make -j$(nproc) \
+    && make install \
+    && ldconfig \
+    && rm -rf /opt/gtsam_src /opt/gtsam_build
+
+# ---------------------------------------------------------------------------
 # 2. Build RTAB-Map from source with ZED support (no ROS)
 #    ZED SDK is installed in /usr/local/zed by the base image.
 # ---------------------------------------------------------------------------
@@ -120,8 +144,8 @@ RUN mkdir -p ${RTABMAP_BUILD} && cd ${RTABMAP_BUILD} && \
         -DWITH_PCL=ON \
         # --- g2o: not packaged for Ubuntu 22.04 ARM64; use TORO (built-in)
         -DWITH_G2O=OFF \
-        # --- Optional extras (disable to speed up build) ---
-        -DWITH_GTSAM=OFF \
+        # --- Optional extras ---
+        -DWITH_GTSAM=ON \
         -DWITH_ORB_OCTREE=OFF \
         -DWITH_TORCH=ON \
         -DCMAKE_PREFIX_PATH=/usr/local/lib/python3.10/dist-packages/torch \
