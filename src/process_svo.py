@@ -318,7 +318,7 @@ def main() -> None:
                                          rtabmap_extra_params)
         # Fast-iteration override: if a locally compiled binary exists, mount it
         # over the container's binary so docker build is not required.
-        local_bin = Path(__file__).parent / "tools_patch/ZedSvo/build/zed_svo"
+        local_bin = Path(__file__).resolve().parent.parent / "tools/ZedSvo/build/zed_svo"
         slam_extra = []
         if args.superpoint:
             slam_extra += ["-v", f"{Path.cwd()}/models:/models:ro"]
