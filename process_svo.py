@@ -350,12 +350,16 @@ def main() -> None:
     # ---- Step 2: Export 2-D occupancy map ------------------------------
     if not args.skip_export:
         export_cmd = build_export_cmd("/output", args.render)
+        export_extra = []
+        if args.superpoint:
+            export_extra += ["-v", f"{Path.cwd()}/models:/models:ro"]
         run_step(
             image=args.image,
             data_host=data_host,
             output_host=output_host,
             cmd_in_container=export_cmd,
             description=f"Step 2/2 – rtabmap-export: {args.render} export",
+            extra_docker_args=export_extra,
         )
     else:
         print("\n[SKIP] Skipping export step (--skip-export).")
