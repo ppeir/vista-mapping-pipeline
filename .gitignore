@@ -5,7 +5,7 @@
 *.obj
 *.mtl
 __pycache__/
-tools_patch/ZedSvo/build/
+tools/ZedSvo/build/
 test_01/
 bureau_01/
 bureau_*/

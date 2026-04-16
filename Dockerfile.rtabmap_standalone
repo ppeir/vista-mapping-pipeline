@@ -89,7 +89,7 @@ RUN git clone --depth 1 --branch ${RTABMAP_VERSION} \
 #     This tool uses CameraStereoZed + RTAB-Map odometry + SLAM, unlike
 #     rtabmap-console which only does visual bag-of-words (no depth/odom).
 # ---------------------------------------------------------------------------
-COPY tools_patch/ZedSvo/ ${RTABMAP_SRC}/tools/ZedSvo/
+COPY tools/ZedSvo/ ${RTABMAP_SRC}/tools/ZedSvo/
 RUN echo 'ADD_SUBDIRECTORY( ZedSvo )' >> ${RTABMAP_SRC}/tools/CMakeLists.txt
 
 # ---------------------------------------------------------------------------
