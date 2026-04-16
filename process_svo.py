@@ -59,6 +59,7 @@ RTABMAP_PARAMS = [
     "--Mem/STMSize", "30",
     "--Mem/InitWMWithAllNodes", "true",
     "--Optimizer/Strategy", "0",    # 0=TORO (built-in); g2o unavailable on Ubuntu 22.04 ARM64
+    "--Optimizer/GravitySigma", "0", # disable gravity links – TORO doesn't support them and crashes
     "--OdomF2M/MaxSize", "1000",
     "--Vis/MaxDepth", "2.0",        # ignore features beyond 2m (reduces noise)
 ]
@@ -74,6 +75,7 @@ SUPERPOINT_PARAMS = [
     "--Vis/FeatureType", "11",
     "--SuperPoint/ModelPath", "/models/superpoint_v1.pt",
     "--Vis/CorNNType", "6",
+    "--PyMatcher/Path", "/opt/SuperGluePretrainedNetwork/rtabmap_superglue.py",
     "--PyMatcher/Model", "indoor",
     "--Vis/MinInliers", "15",
 ]
@@ -320,6 +322,7 @@ def main() -> None:
         slam_extra = []
         if args.superpoint:
             slam_extra += ["-v", f"{Path.cwd()}/models:/models:ro"]
+            slam_extra += ["-v", f"{Path.cwd()}/models/superglue_indoor.pt:/opt/SuperGluePretrainedNetwork/models/weights/superglue_indoor.pth:ro"]
         if local_bin.is_file():
             print(f"[INFO] Using local binary: {local_bin}")
             slam_extra += ["-v", f"{local_bin}:/usr/local/bin/rtabmap-zed_svo:ro"]
@@ -353,6 +356,7 @@ def main() -> None:
         export_extra = []
         if args.superpoint:
             export_extra += ["-v", f"{Path.cwd()}/models:/models:ro"]
+            export_extra += ["-v", f"{Path.cwd()}/models/superglue_indoor.pt:/opt/SuperGluePretrainedNetwork/models/weights/superglue_indoor.pth:ro"]
         run_step(
             image=args.image,
             data_host=data_host,
