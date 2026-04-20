@@ -12,3 +12,5 @@ bureau_*/
 *.svo
 *.svo2
 models/
+*.avi
+*.pgm

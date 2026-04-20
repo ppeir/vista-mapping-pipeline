@@ -187,6 +187,7 @@ int main(int argc, char * argv[])
 
     // --- Query SVO metadata for trim-end ---
     int svoTotalFrames = 0;
+    double svoFPS = 0.0;
 #ifdef RTABMAP_ZED
     if(trimEnd > 0.0f)
     {
@@ -198,9 +199,15 @@ int main(int argc, char * argv[])
         sl::ERROR_CODE err = tmpZed.open(initParams);
         if(err == sl::ERROR_CODE::SUCCESS)
         {
+            // SVO2 files (H.265): getSVONumberOfFrames() returns -1 until at
+            // least one grab() has been performed (ZED SDK known behaviour).
+            sl::RuntimeParameters rt;
+            rt.enable_depth = false;
+            tmpZed.grab(rt);
             svoTotalFrames = tmpZed.getSVONumberOfFrames();
+            svoFPS = (double)tmpZed.getCameraInformation().camera_configuration.fps;
             tmpZed.close();
-            printf("  SVO frames    : %d\n", svoTotalFrames);
+            printf("  SVO frames    : %d (%.0f fps)\n", svoTotalFrames, svoFPS);
         }
         else
         {
@@ -302,13 +309,25 @@ int main(int argc, char * argv[])
     // --- Trimming setup ---
     double firstStamp = data.stamp();
     double trimStartStamp = (trimStart > 0.0f) ? firstStamp + (double)trimStart : 0.0;
-    double trimStopStamp  = 0.0; // computed after 2nd frame
     int totalFramesSeen   = 0;
 
-    if(trimEnd > 0.0f && svoTotalFrames <= 1)
+    // Trim-end: frame-count-based (avoids timestamp drift from processing latency)
+    int trimEndFrameNum = 0;
+    if(trimEnd > 0.0f)
     {
-        printf("  [WARN] Cannot determine SVO frame count; --trim-end ignored.\n");
-        trimEnd = 0.0f;
+        if(svoTotalFrames > 1 && svoFPS > 0.0)
+        {
+            trimEndFrameNum = svoTotalFrames - (int)round(trimEnd * svoFPS);
+            if(trimEndFrameNum < 1) trimEndFrameNum = 1;
+            printf("  Trim: frames 0..%d / %d (%.0f fps, stop at %.1fs from start)\n",
+                   trimEndFrameNum, svoTotalFrames, svoFPS,
+                   (double)trimEndFrameNum / svoFPS);
+        }
+        else
+        {
+            printf("  [WARN] Cannot determine SVO frame count/fps; --trim-end ignored.\n");
+            trimEnd = 0.0f;
+        }
     }
 
     printf("Processing SVO frames...\n");
@@ -318,27 +337,11 @@ int main(int argc, char * argv[])
     {
         ++totalFramesSeen;
 
-        // Estimate FPS from first two frames and compute stop timestamp
-        if(trimEnd > 0.0f && trimStopStamp <= 0.0 && totalFramesSeen == 2)
+        // Check trim-end: stop if we've passed the frame threshold
+        if(trimEndFrameNum > 0 && totalFramesSeen > trimEndFrameNum)
         {
-            double dt = data.stamp() - firstStamp;
-            if(dt > 0)
-            {
-                double fps = 1.0 / dt;
-                double totalDuration = (double)svoTotalFrames / fps;
-                trimStopStamp = firstStamp + totalDuration - (double)trimEnd;
-                printf("  Trim: ~%.0f fps, ~%.1fs total duration\n", fps, totalDuration);
-                printf("  Trim: processing window [%.1fs .. %.1fs]\n",
-                       trimStartStamp > 0 ? trimStart : 0.0,
-                       trimStopStamp - firstStamp);
-            }
-        }
-
-        // Check trim-end: stop if past the computed stop timestamp
-        if(trimStopStamp > 0.0 && data.stamp() >= trimStopStamp)
-        {
-            printf("\n  Trim-end reached at frame %d (t=%.1fs)\n",
-                   totalFramesSeen, data.stamp() - firstStamp);
+            printf("\n  Trim-end reached at frame %d (threshold: %d)\n",
+                   totalFramesSeen, trimEndFrameNum);
             break;
         }
 
