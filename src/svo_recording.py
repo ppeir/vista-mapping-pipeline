@@ -40,6 +40,8 @@ def main(opt):
     init = sl.InitParameters()
     init.depth_mode = sl.DEPTH_MODE.NONE # Set configuration parameters for the ZED
     init.async_image_retrieval = False; # This parameter can be used to record SVO in camera FPS even if the grab loop is running at a lower FPS (due to compute for ex.)
+    if opt.fps is not None:
+        init.camera_fps = opt.fps
 
     status = cam.open(init) 
     if status > sl.ERROR_CODE.SUCCESS: 
@@ -63,7 +65,9 @@ def main(opt):
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--output_svo_file', type=str, help='Path to the SVO file that will be written', required= True)
+    parser.add_argument('--output_svo_file', type=str, help='Path to the SVO file that will be written', required=True)
+    parser.add_argument('--fps', type=int, default=None, choices=[15, 30, 60, 100],
+                        help='Recording frame rate (15, 30, 60 or 100 fps). Default: camera native FPS.')
     opt = parser.parse_args()
     if not opt.output_svo_file.endswith((".svo", ".svo2")):
         print("--output_svo_file parameter should be a .svo file but is not : ",opt.output_svo_file,"Exit program.")
