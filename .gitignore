@@ -7,8 +7,7 @@
 __pycache__/
 tools/ZedSvo/build/
 test_01/
-bureau_01/
-bureau_*/
+data/
 *.svo
 *.svo2
 models/

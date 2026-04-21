@@ -221,7 +221,10 @@ int main(int argc, char * argv[])
         zedQuality==0?"NONE":
         zedQuality==1?"PERFORMANCE":
         zedQuality==2?"QUALITY":
-        zedQuality==3?"NEURAL":"UNKNOWN");
+        zedQuality==3?"ULTRA(deprecated)":
+        zedQuality==4?"NEURAL_LIGHT":
+        zedQuality==5?"NEURAL":
+        zedQuality==6?"NEURAL_PLUS":"UNKNOWN");
     printf("  Skip frames   : %d\n", skipFrames);
     printf("  Confidence    : %d\n", confidenceThr);
     printf("  Textureness   : %d\n", texturenessThr);

@@ -81,8 +81,17 @@ SUPERPOINT_PARAMS = [
 ]
 
 # rtabmap-export render modes
+# Cloud density is controlled by two orthogonal parameters:
+#   --cloud_decimation N : keep 1 pixel out of N from each depth image (default: 4)
+#                          1 = full resolution, 2 = half, 4 = quarter (default)
+#   --cloud_voxel_size M : voxel-grid downsampling in metres after assembly (default: 0.01)
+#                          0 = disabled (keep all points)
+# Tradeoff: decimation=1 + voxel=0 → densest cloud, largest file, longest export
 RENDER_MODES = {
-    "cloud": ["--cloud"],                                  # point cloud PLY
+    "cloud": ["--cloud",
+              "--cloud_decimation", "1",   # full pixel resolution (default=4)
+              "--cloud_voxel_size", "0.0", # no voxel downsampling (default=0.01)
+              ],
     "mesh":  ["--mesh"],                                   # triangulated mesh PLY
     "texture": ["--texture", "--texture_size", "4096"],    # textured mesh OBJ
 }
@@ -131,7 +140,7 @@ def image_exists(image: str) -> bool:
 
 def build_rtabmap_cmd(svo_filename: str, output_dir_in_container: str,
                       trim_start: float = 0.0, trim_end: float = 0.0,
-                      quality: int = 3, superpoint: bool = False,
+                      quality: int = 5, superpoint: bool = False,
                       extra_params: list[str] | None = None) -> list[str]:
     """
     Build the rtabmap-zed_svo CLI command for offline RGBD-SLAM.
@@ -146,7 +155,7 @@ def build_rtabmap_cmd(svo_filename: str, output_dir_in_container: str,
         ["rtabmap-zed_svo"]
         + ["--output", output_dir_in_container]
         + ["--output_name", "rtabmap"]
-        + ["--quality", str(quality)]   # 0=NONE, 1=PERFORMANCE, 2=QUALITY, 3=NEURAL
+        + ["--quality", str(quality)]   # 0=NONE, 1=PERFORMANCE, 2=QUALITY, 3=ULTRA(deprecated), 4=NEURAL_LIGHT, 5=NEURAL, 6=NEURAL_PLUS
         + RTABMAP_PARAMS
         + (SUPERPOINT_PARAMS if superpoint else [])
         + (extra_params or [])
@@ -263,9 +272,9 @@ def main() -> None:
     parser.add_argument(
         "--quality",
         type=int,
-        default=3,
-        choices=[0, 1, 2, 3],
-        help="ZED depth quality: 0=NONE, 1=PERFORMANCE, 2=QUALITY, 3=NEURAL (default: 3).",
+        default=5,
+        choices=[0, 1, 2, 3, 4, 5, 6],
+        help="ZED depth quality: 0=NONE, 1=PERFORMANCE, 2=QUALITY, 3=ULTRA(deprecated), 4=NEURAL_LIGHT, 5=NEURAL, 6=NEURAL_PLUS (default: 5).",
     )
     parser.add_argument(
         "--superpoint",
