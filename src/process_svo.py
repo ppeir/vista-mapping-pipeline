@@ -52,8 +52,11 @@ RTABMAP_PARAMS = [
     "--RGBD/CreateOccupancyGrid", "true",
     "--Grid/3D", "false",
     "--Grid/RayTracing", "true",
-    "--Grid/CellSize", "0.05",
+    "--Grid/CellSize", "0.01",
     "--Grid/ClusterRadius", "0.1",
+    "--Grid/MinObstacleHeight", "0.1",  # ignore floor returns below 10 cm
+    "--Grid/MaxObstacleHeight", "2",  # ignore ceiling / high reflections above 1.8 m
+    "--Grid/MinClusterSize", "15",      # discard isolated noise clusters < n cells
     "--Rtabmap/TimeThr", "0",
     "--Rtabmap/DetectionRate", "1",
     "--Mem/STMSize", "30",
@@ -179,6 +182,18 @@ def build_export_cmd(output_dir_in_container: str, render: str) -> list[str]:
     )
 
 
+def build_regen_grid_cmd(output_dir_in_container: str,
+                         extra_params: list[str] | None = None) -> list[str]:
+    """Rebuild map.pgm/map.yaml from an existing DB with current Grid/* params."""
+    return (
+        ["rtabmap-zed_svo", "--regen-grid"]
+        + ["--output", output_dir_in_container]
+        + ["--output_name", "rtabmap"]
+        + RTABMAP_PARAMS
+        + (extra_params or [])
+    )
+
+
 def run_step(
     image: str,
     data_host: str,
@@ -228,8 +243,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--svo",
-        required=True,
-        help="Absolute path to the input SVO file (e.g. /mnt/data/bureau_complet.svo).",
+        default=None,
+        help="Absolute path to the input SVO file. Required unless --regen-grid is set.",
     )
     parser.add_argument(
         "--output",
@@ -258,6 +273,12 @@ def main() -> None:
         help="Skip the map export step (only produce rtabmap.db).",
     )
     parser.add_argument(
+        "--regen-grid",
+        action="store_true",
+        help="Rebuild map.pgm/map.yaml from existing rtabmap.db with current Grid/* params. "
+             "Implies --skip-slam and --skip-export; --svo is not required.",
+    )
+    parser.add_argument(
         "--trim-start",
         type=float,
         default=0.0,
@@ -284,21 +305,33 @@ def main() -> None:
     )
     args, extra = parser.parse_known_args()
 
+    # --regen-grid implies --skip-slam and --skip-export: only the grid is rebuilt
+    if args.regen_grid:
+        args.skip_slam = True
+        args.skip_export = True
+
     # Extra arguments are forwarded as RTAB-Map --Param value pairs
     # Usage: python3 process_svo.py --svo ... --Vis/MaxDepth 5.0 --Grid/CellSize 0.03
     rtabmap_extra_params = extra  # e.g. ["--Vis/MaxDepth", "5.0"]
 
     # ---- Validate inputs -----------------------------------------------
-    svo_path = Path(args.svo).resolve()
-    if not svo_path.is_file():
-        print(f"[ERROR] SVO file not found: {svo_path}", file=sys.stderr)
-        sys.exit(1)
-
-    data_host = str(svo_path.parent)
-    svo_filename = svo_path.name
+    if args.svo is None:
+        if not args.skip_slam:
+            parser.error("--svo is required unless --regen-grid (or --skip-slam) is set.")
+        svo_filename = None
+        data_host = None
+    else:
+        svo_path = Path(args.svo).resolve()
+        if not svo_path.is_file():
+            print(f"[ERROR] SVO file not found: {svo_path}", file=sys.stderr)
+            sys.exit(1)
+        svo_filename = svo_path.name
+        data_host = str(svo_path.parent)
 
     output_host = str(Path(args.output).resolve())
     os.makedirs(output_host, exist_ok=True)
+    if data_host is None:
+        data_host = output_host  # regen-grid: no SVO dir, mount output as /data
 
     # ---- Pre-flight checks ---------------------------------------------
     check_docker()
@@ -311,7 +344,8 @@ def main() -> None:
               file=sys.stderr)
         sys.exit(1)
 
-    print(f"\n[INFO] SVO input  : {svo_path}")
+    if args.svo:
+        print(f"[INFO] SVO input  : {svo_path}")
     print(f"[INFO] Output dir : {output_host}")
     print(f"[INFO] Render mode: {args.render}")
     print(f"[INFO] Docker image: {args.image}")
@@ -358,6 +392,25 @@ def main() -> None:
                       file=sys.stderr)
     else:
         print("\n[SKIP] Skipping SLAM step (--skip-slam).")
+
+    # ---- Optional: Regen 2D grid from existing DB --------------------
+    if args.regen_grid:
+        db_path = Path(output_host) / "rtabmap.db"
+        if not db_path.is_file():
+            print(f"[ERROR] rtabmap.db not found in {output_host}.", file=sys.stderr)
+            sys.exit(1)
+        local_bin = Path(__file__).resolve().parent.parent / "tools/ZedSvo/build/zed_svo"
+        regen_extra = []
+        if local_bin.is_file():
+            regen_extra += ["-v", f"{local_bin}:/usr/local/bin/rtabmap-zed_svo:ro"]
+        run_step(
+            image=args.image,
+            data_host=data_host,
+            output_host=output_host,
+            cmd_in_container=build_regen_grid_cmd("/output", rtabmap_extra_params),
+            description="regen-grid – Rebuild 2D map from existing DB",
+            extra_docker_args=regen_extra,
+        )
 
     # ---- Step 2: Export 2-D occupancy map ------------------------------
     if not args.skip_export:

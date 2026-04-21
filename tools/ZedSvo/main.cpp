@@ -50,13 +50,14 @@ void showUsage()
         "Options:\n"
         "  --output <dir>         Output directory (default: current dir)\n"
         "  --output_name <name>   Database name without .db (default: rtabmap)\n"
-        "  --quality <0-3>        ZED depth quality: 0=NONE 1=PERFORMANCE 2=QUALITY 3=NEURAL (default: 1)\n"
+        "  --quality <0-6>        ZED depth quality: 0=NONE 1=PERFORMANCE 2=QUALITY 3=ULTRA(deprecated) 4=NEURAL_LIGHT 5=NEURAL 6=NEURAL_PLUS (default: 1)\n"
         "  --skip <N>             Skip N frames between processed frames (default: 0)\n"
         "  --trim-start <sec>     Trim first <sec> seconds from the SVO (default: 0)\n"
         "  --trim-end <sec>       Trim last <sec> seconds from the SVO (default: 0)\n"
         "  --confidence <0-100>   ZED depth confidence threshold (default: 10, lower=stricter)\n"
         "  --textureness <0-100>  ZED textureness confidence threshold (default: 90)\n"
         "  --quiet                Suppress per-iteration output\n"
+        "  --regen-grid           Rebuild map.pgm/map.yaml from existing DB (no SVO needed)\n"
         "%s\n"
         "Example:\n\n"
         "  $ rtabmap-zed_svo \\\n"
@@ -74,6 +75,99 @@ void sighandler(int sig)
 {
     printf("\nSignal %d caught, stopping...\n", sig);
     g_running = false;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: assemble and save map.pgm / map.yaml from local grids in signatures
+// ---------------------------------------------------------------------------
+static void saveOccupancyGrid(
+    const std::string& output,
+    const std::string& databasePath,
+    const std::map<int, Transform>& poses,
+    const std::map<int, Signature>& signatures,
+    const ParametersMap& parameters)
+{
+    printf("\nAssembling 2D occupancy grid...\n");
+    LocalGridCache cache;
+    int gridCount = 0;
+    for(std::map<int, Signature>::const_iterator iter = signatures.begin();
+        iter != signatures.end(); ++iter)
+    {
+        cv::Mat ground, obstacles, empty;
+        iter->second.sensorData().uncompressDataConst(
+            0, 0, 0, 0, &ground, &obstacles, &empty);
+        if(!ground.empty() || !obstacles.empty() || !empty.empty())
+        {
+            cache.add(iter->first, ground, obstacles, empty,
+                iter->second.sensorData().gridCellSize(),
+                iter->second.sensorData().gridViewPoint());
+            ++gridCount;
+        }
+    }
+    if(gridCount > 0)
+    {
+        printf("  Loaded %d local grids\n", gridCount);
+        OccupancyGrid grid(&cache, parameters);
+        grid.update(poses);
+        float xMin = 0, yMin = 0;
+        cv::Mat map = grid.getMap(xMin, yMin);
+        if(!map.empty())
+        {
+            float cellSize = grid.getCellSize();
+            // Convert: -1->205(unknown), 0->254(free), 100->0(occupied)
+            cv::Mat pgm(map.rows, map.cols, CV_8UC1);
+            for(int i = 0; i < map.rows * map.cols; ++i)
+            {
+                signed char v = ((signed char*)map.data)[i];
+                if(v == -1)
+                    pgm.data[i] = 205;
+                else
+                    pgm.data[i] = (unsigned char)(254 - v * 254 / 100);
+            }
+            // Flip: ROS map origin bottom-left, PGM origin top-left
+            cv::flip(pgm, pgm, 0);
+
+            std::string pgmPath = output + "/map.pgm";
+            cv::imwrite(pgmPath, pgm);
+
+            std::string yamlPath = output + "/map.yaml";
+            FILE* yaml = fopen(yamlPath.c_str(), "w");
+            if(yaml)
+            {
+                fprintf(yaml, "image: map.pgm\n");
+                fprintf(yaml, "resolution: %f\n", cellSize);
+                fprintf(yaml, "origin: [%f, %f, 0.0]\n", xMin, yMin);
+                fprintf(yaml, "negate: 0\n");
+                fprintf(yaml, "occupied_thresh: 0.65\n");
+                fprintf(yaml, "free_thresh: 0.196\n");
+                fclose(yaml);
+            }
+
+            // Also update the assembled grid in the database
+            {
+                DBDriver* driver = DBDriver::create();
+                if(driver->openConnection(databasePath, false))
+                {
+                    driver->save2DMap(map, xMin, yMin, cellSize);
+                    driver->closeConnection(false);
+                }
+                delete driver;
+            }
+
+            printf("  2D grid saved   : %s (%dx%d, %.3f m/cell)\n",
+                pgmPath.c_str(), map.cols, map.rows, cellSize);
+        }
+        else
+        {
+            printf("  [WARN] Assembled grid is empty.\n");
+        }
+    }
+    else
+    {
+        printf("  [WARN] No local grid data in %d signatures.\n",
+            (int)signatures.size());
+        printf("         Ensure --RGBD/CreateOccupancyGrid true was set during SLAM.\n");
+    }
 }
 
 int main(int argc, char * argv[])
@@ -101,6 +195,7 @@ int main(int argc, char * argv[])
     int confidenceThr = 100; // ZED depth confidence (0-100, lower=stricter)
     int texturenessThr = 90; // ZED textureness confidence (0-100)
     bool quiet      = false;
+    bool regenGrid  = false;
 
     // --- Parse custom options (before Parameters::parseArguments) ---
     for(int i = 1; i < argc; ++i)
@@ -148,18 +243,25 @@ int main(int argc, char * argv[])
         {
             quiet = true;
         }
+        else if(std::strcmp(argv[i], "--regen-grid") == 0)
+        {
+            regenGrid = true;
+        }
         else if(std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-help") == 0)
         {
             showUsage();
         }
     }
 
-    // SVO path is the last positional argument
-    svoPath = argv[argc - 1];
-    if(!UFile::exists(svoPath))
+    // SVO path is the last positional argument (not needed for --regen-grid)
+    if(!regenGrid)
     {
-        printf("SVO file not found: %s\n", svoPath.c_str());
-        showUsage();
+        svoPath = argv[argc - 1];
+        if(!UFile::exists(svoPath))
+        {
+            printf("SVO file not found: %s\n", svoPath.c_str());
+            showUsage();
+        }
     }
 
     // Parse RTAB-Map --Param value pairs
@@ -181,7 +283,10 @@ int main(int argc, char * argv[])
     // --- Print configuration ---
     printf("\nrtabmap-zed_svo – Offline RGBD-SLAM from ZED SVO\n");
     printf("=================================================\n");
-    printf("  SVO file      : %s\n", svoPath.c_str());
+    if(!regenGrid)
+    {
+        printf("  SVO file      : %s\n", svoPath.c_str());
+    }
     printf("  Output dir    : %s\n", output.c_str());
     printf("  Output name   : %s\n", outputName.c_str());
 
@@ -243,6 +348,37 @@ int main(int argc, char * argv[])
         }
     }
     printf("  RTAB-Map %s\n\n", RTABMAP_VERSION);
+
+    // ------------------------------------------------------------------
+    // [regen-grid] Rebuild 2D map from existing DB and exit
+    // ------------------------------------------------------------------
+    if(regenGrid)
+    {
+        std::string databasePath = output + "/" + outputName + ".db";
+        if(!UFile::exists(databasePath))
+        {
+            printf("[ERROR] Database not found: %s\n", databasePath.c_str());
+            printf("        Run without --regen-grid first to build the DB.\n");
+            return 1;
+        }
+        printf("Regenerating 2D grid from: %s\n\n", databasePath.c_str());
+        uInsert(parameters, ParametersPair(Parameters::kMemInitWMWithAllNodes(), "true"));
+        Rtabmap regenRtabmap;
+        regenRtabmap.init(parameters, databasePath);
+        std::map<int, Transform> poses;
+        std::multimap<int, Link> links;
+        std::map<int, Signature> signatures;
+        regenRtabmap.getGraph(poses, links, true, true, &signatures, false, false, false, true);
+        regenRtabmap.close(false);
+        if(poses.empty())
+        {
+            printf("[ERROR] No poses found in database.\n");
+            return 1;
+        }
+        printf("  Loaded %d poses from DB\n", (int)poses.size());
+        saveOccupancyGrid(output, databasePath, poses, signatures, parameters);
+        return 0;
+    }
 
     // ------------------------------------------------------------------
     // 1. Create ZED camera (SVO file mode)
@@ -497,89 +633,7 @@ int main(int argc, char * argv[])
     // ------------------------------------------------------------------
     // 5. Generate 2D occupancy grid from local grids stored in DB
     // ------------------------------------------------------------------
-    printf("\nAssembling 2D occupancy grid...\n");
-    {
-        LocalGridCache cache;
-        int gridCount = 0;
-        for(std::map<int, Signature>::iterator iter = signatures.begin();
-            iter != signatures.end(); ++iter)
-        {
-            cv::Mat ground, obstacles, empty;
-            iter->second.sensorData().uncompressDataConst(
-                0, 0, 0, 0, &ground, &obstacles, &empty);
-            if(!ground.empty() || !obstacles.empty() || !empty.empty())
-            {
-                cache.add(iter->first, ground, obstacles, empty,
-                    iter->second.sensorData().gridCellSize(),
-                    iter->second.sensorData().gridViewPoint());
-                ++gridCount;
-            }
-        }
-        if(gridCount > 0)
-        {
-            printf("  Loaded %d local grids\n", gridCount);
-            OccupancyGrid grid(&cache, parameters);
-            grid.update(poses);
-            float xMin = 0, yMin = 0;
-            cv::Mat map = grid.getMap(xMin, yMin);
-            if(!map.empty())
-            {
-                float cellSize = grid.getCellSize();
-                // Convert: -1->205(unknown), 0->254(free), 100->0(occupied)
-                cv::Mat pgm(map.rows, map.cols, CV_8UC1);
-                for(int i = 0; i < map.rows * map.cols; ++i)
-                {
-                    signed char v = ((signed char*)map.data)[i];
-                    if(v == -1)
-                        pgm.data[i] = 205;
-                    else
-                        pgm.data[i] = (unsigned char)(254 - v * 254 / 100);
-                }
-                // Flip: ROS map origin bottom-left, PGM origin top-left
-                cv::flip(pgm, pgm, 0);
-
-                std::string pgmPath = output + "/map.pgm";
-                cv::imwrite(pgmPath, pgm);
-
-                std::string yamlPath = output + "/map.yaml";
-                FILE* yaml = fopen(yamlPath.c_str(), "w");
-                if(yaml)
-                {
-                    fprintf(yaml, "image: map.pgm\n");
-                    fprintf(yaml, "resolution: %f\n", cellSize);
-                    fprintf(yaml, "origin: [%f, %f, 0.0]\n", xMin, yMin);
-                    fprintf(yaml, "negate: 0\n");
-                    fprintf(yaml, "occupied_thresh: 0.65\n");
-                    fprintf(yaml, "free_thresh: 0.196\n");
-                    fclose(yaml);
-                }
-
-                // Also save assembled grid in the database
-                {
-                    DBDriver* driver = DBDriver::create();
-                    if(driver->openConnection(databasePath, false))
-                    {
-                        driver->save2DMap(map, xMin, yMin, cellSize);
-                        driver->closeConnection(false);
-                    }
-                    delete driver;
-                }
-
-                printf("  2D grid saved   : %s (%dx%d, %.3f m/cell)\n",
-                    pgmPath.c_str(), map.cols, map.rows, cellSize);
-            }
-            else
-            {
-                printf("  [WARN] Assembled grid is empty.\n");
-            }
-        }
-        else
-        {
-            printf("  [WARN] No local grid data in %d signatures.\n",
-                (int)signatures.size());
-            printf("         Ensure --RGBD/CreateOccupancyGrid true is set.\n");
-        }
-    }
+    saveOccupancyGrid(output, databasePath, poses, signatures, parameters);
 
     // ------------------------------------------------------------------
     // 6. Close database
