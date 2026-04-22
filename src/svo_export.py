@@ -94,10 +94,11 @@ def main(opt):
     video_writer = None
     if output_as_video:
         # Create video writer with MPEG-4 part 2 codec
+        width_out = width if opt.side != 'both' else width_sbs
         video_writer = cv2.VideoWriter(avi_output_path,
                                        cv2.VideoWriter.fourcc('M', '4', 'S', '2'),
                                        max(zed.get_camera_information().camera_configuration.fps, 25),
-                                       (width_sbs, height))
+                                       (width_out, height))
         if not video_writer.isOpened():
             sys.stdout.write("OpenCV video writer cannot be opened. Please check the .avi file path and write "
                              "permissions.\n")
@@ -110,11 +111,26 @@ def main(opt):
     sys.stdout.write("Converting SVO... Use Ctrl-C to interrupt conversion.\n")
 
     nb_frames = zed.get_svo_number_of_frames()
+    fps = zed.get_camera_information().camera_configuration.fps
+
+    # Compute frame range from trim parameters
+    start_frame = int(round(opt.trim_start * fps)) if opt.trim_start > 0 else 0
+    end_frame = nb_frames - int(round(opt.trim_end * fps)) if opt.trim_end > 0 else nb_frames
+    end_frame = max(start_frame + 1, min(end_frame, nb_frames))
+    export_frames = end_frame - start_frame
+
+    if start_frame > 0:
+        zed.set_svo_position(start_frame)
+        sys.stdout.write(f"Trimming: start={opt.trim_start}s (frame {start_frame}), end={opt.trim_end}s (frame {end_frame}/{nb_frames})\n")
 
     while True:
         err = zed.grab(rt_param)
         if err <= sl.ERROR_CODE.SUCCESS:
             svo_position = zed.get_svo_position()
+
+            # Stop early if trim-end reached
+            if svo_position >= end_frame:
+                break
 
             # Retrieve SVO images
             zed.retrieve_image(left_image, sl.VIEW.LEFT)
@@ -127,35 +143,39 @@ def main(opt):
                 zed.retrieve_measure(depth_image, sl.MEASURE.DEPTH)
 
             if output_as_video:
-                # Copy the left image to the left side of SBS image
-                svo_image_sbs_rgba[0:height, 0:width, :] = left_image.get_data()
-
-                # Copy the right image to the right side of SBS image
-                svo_image_sbs_rgba[0:, width:, :] = right_image.get_data()
-
+                if opt.side == 'both':
+                    # Copy the left image to the left side of SBS image
+                    svo_image_sbs_rgba[0:height, 0:width, :] = left_image.get_data()
+                    # Copy the right image to the right side of SBS image
+                    svo_image_sbs_rgba[0:, width:, :] = right_image.get_data()
+                    frame_rgba = svo_image_sbs_rgba
+                elif opt.side == 'left':
+                    frame_rgba = left_image.get_data()
+                else:  # right
+                    frame_rgba = right_image.get_data()
                 # Convert SVO image from RGBA to RGB
-                ocv_image_sbs_rgb = cv2.cvtColor(svo_image_sbs_rgba, cv2.COLOR_RGBA2RGB)
-
+                ocv_image_rgb = cv2.cvtColor(frame_rgba, cv2.COLOR_RGBA2RGB)
                 # Write the RGB image in the video
                 assert video_writer is not None
-                video_writer.write(ocv_image_sbs_rgb)
+                video_writer.write(ocv_image_rgb)
             else:
                 # Generate file names
-                filename1 = output_dir +"/"+ ("left%s.png" % str(svo_position).zfill(6))
-                filename2 = output_dir +"/"+ (("right%s.png" if app_type == AppType.LEFT_AND_RIGHT
-                                           else "depth%s.png") % str(svo_position).zfill(6))
-                # Save Left images
-                cv2.imwrite(str(filename1), left_image.get_data())
-
-                if app_type != AppType.LEFT_AND_DEPTH_16:
-                    # Save right images
-                    cv2.imwrite(str(filename2), right_image.get_data())
-                else:
-                    # Save depth images (convert to uint16)
-                    cv2.imwrite(str(filename2), depth_image.get_data().astype(np.uint16))
+                if opt.side in ('both', 'left'):
+                    filename1 = output_dir + "/" + ("left%s.png" % str(svo_position).zfill(6))
+                    # Save Left images
+                    cv2.imwrite(str(filename1), left_image.get_data())
+                if opt.side in ('both', 'right'):
+                    filename2 = output_dir + "/" + (("right%s.png" if app_type == AppType.LEFT_AND_RIGHT
+                                               else "depth%s.png") % str(svo_position).zfill(6))
+                    if app_type != AppType.LEFT_AND_DEPTH_16:
+                        # Save right images
+                        cv2.imwrite(str(filename2), right_image.get_data())
+                    else:
+                        # Save depth images (convert to uint16)
+                        cv2.imwrite(str(filename2), depth_image.get_data().astype(np.uint16))
 
             # Display progress
-            progress_bar((svo_position + 1) / nb_frames * 100, 30)
+            progress_bar((svo_position - start_frame + 1) / export_frames * 100, 30)
         if err == sl.ERROR_CODE.END_OF_SVOFILE_REACHED:
             progress_bar(100 , 30)
             sys.stdout.write("\nSVO end has been reached. Exiting now.\n")
@@ -174,7 +194,13 @@ if __name__ == "__main__":
     parser.add_argument('--mode', type = int, required=True, help= " Mode 0 is to export LEFT+RIGHT AVI. \n Mode 1 is to export LEFT+DEPTH_VIEW Avi. \n Mode 2 is to export LEFT+RIGHT image sequence. \n Mode 3 is to export LEFT+DEPTH_View image sequence. \n Mode 4 is to export LEFT+DEPTH_16BIT image sequence.")
     parser.add_argument('--input_svo_file', type=str, required=True, help='Path to the .svo file')
     parser.add_argument('--output_avi_file', type=str, help='Path to the output .avi file, if mode includes a .avi export', default = '')
-    parser.add_argument('--output_path_dir', type = str, help = 'Path to a directory, where .png will be written, if mode includes image sequence export', default = '')
+    parser.add_argument('--output_path_dir', type=str, help='Path to a directory, where .png will be written, if mode includes image sequence export', default='')
+    parser.add_argument('--side', type=str, choices=['left', 'right', 'both'], default='both',
+                        help='Which side to export: left, right, or both (default: both).')
+    parser.add_argument('--trim-start', type=float, default=0.0,
+                        help='Skip the first N seconds of the SVO (default: 0).')
+    parser.add_argument('--trim-end', type=float, default=0.0,
+                        help='Skip the last N seconds of the SVO (default: 0).')
     opt = parser.parse_args()
     if opt.mode > 4 or opt.mode < 0 :
         print("Mode shoud be between 0 and 4 included. \n Mode 0 is to export LEFT+RIGHT AVI. \n Mode 1 is to export LEFT+DEPTH_VIEW Avi. \n Mode 2 is to export LEFT+RIGHT image sequence. \n Mode 3 is to export LEFT+DEPTH_View image sequence. \n Mode 4 is to export LEFT+DEPTH_16BIT image sequence.")
