@@ -52,9 +52,9 @@ RTABMAP_PARAMS = [
     "--RGBD/CreateOccupancyGrid", "true",
     "--Grid/3D", "false",
     "--Grid/RayTracing", "true",
-    "--Grid/CellSize", "0.01",
+    "--Grid/CellSize", "0.05",
     "--Grid/ClusterRadius", "0.1",
-    "--Grid/MinObstacleHeight", "0.1",  # ignore floor returns below 10 cm
+    "--Grid/MinObstacleHeight", "0.1",  # ignore floor returns below 5 cm
     "--Grid/MaxObstacleHeight", "2",  # ignore ceiling / high reflections above 1.8 m
     "--Grid/MinClusterSize", "15",      # discard isolated noise clusters < n cells
     "--Rtabmap/TimeThr", "0",

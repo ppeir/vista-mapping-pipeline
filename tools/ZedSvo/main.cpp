@@ -290,11 +290,10 @@ int main(int argc, char * argv[])
     printf("  Output dir    : %s\n", output.c_str());
     printf("  Output name   : %s\n", outputName.c_str());
 
-    // --- Query SVO metadata for trim-end ---
+    // --- Query SVO metadata (always: needed for trim AND for timestamp correction) ---
     int svoTotalFrames = 0;
     double svoFPS = 0.0;
 #ifdef RTABMAP_ZED
-    if(trimEnd > 0.0f)
     {
         sl::Camera tmpZed;
         sl::InitParameters initParams;
@@ -312,12 +311,17 @@ int main(int argc, char * argv[])
             svoTotalFrames = tmpZed.getSVONumberOfFrames();
             svoFPS = (double)tmpZed.getCameraInformation().camera_configuration.fps;
             tmpZed.close();
-            printf("  SVO frames    : %d (%.0f fps)\n", svoTotalFrames, svoFPS);
+            printf("  SVO frames    : %d (%.0f fps, %.1fs)\n", svoTotalFrames, svoFPS,
+                   svoFPS > 0.0 ? svoTotalFrames / svoFPS : 0.0);
         }
         else
         {
-            printf("  [WARN] Could not query SVO frame count (err=%d); --trim-end ignored.\n", (int)err);
-            trimEnd = 0.0f;
+            printf("  [WARN] Could not query SVO metadata (err=%d).\n", (int)err);
+            if(trimEnd > 0.0f)
+            {
+                printf("         --trim-end ignored.\n");
+                trimEnd = 0.0f;
+            }
         }
     }
 #endif
@@ -475,6 +479,18 @@ int main(int argc, char * argv[])
     while(data.isValid() && g_running)
     {
         ++totalFramesSeen;
+
+        // Override stamp with a real SVO-based frame timestamp.
+        // CameraStereoZed in SVO playback mode returns wall-clock time from
+        // grab() instead of the original recording timestamp (ZED SDK known
+        // behaviour). This causes RTAB-Map poses to span wall-clock processing
+        // time (~329s for a 186s video at 8.5fps processing) instead of the
+        // actual recording duration (186s). Fix: assign timestamp = frame_index
+        // / nominal_fps, which matches the real SVO recording cadence exactly.
+        if(svoFPS > 0.0)
+        {
+            data.setStamp((double)(totalFramesSeen - 1) / svoFPS);
+        }
 
         // Check trim-end: stop if we've passed the frame threshold
         if(trimEndFrameNum > 0 && totalFramesSeen > trimEndFrameNum)

@@ -13,3 +13,4 @@ data/
 models/
 *.avi
 *.pgm
+.history/
