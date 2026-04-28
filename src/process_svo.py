@@ -51,20 +51,19 @@ RTABMAP_PARAMS = [
     "--Odom/Strategy", "1",
     "--RGBD/CreateOccupancyGrid", "true",
     "--Grid/3D", "false",
-    "--Grid/RayTracing", "true",
+    "--Grid/RayTracing", "false",       # OctoMap not compiled; true triggers a warning
     "--Grid/CellSize", "0.05",
     "--Grid/ClusterRadius", "0.1",
-    "--Grid/MinObstacleHeight", "0.1",  # ignore floor returns below 5 cm
-    "--Grid/MaxObstacleHeight", "2",  # ignore ceiling / high reflections above 1.8 m
+    "--Grid/MaxObstacleHeight", "2.0",  # ignore points above 2 m (ceiling / high reflections)
     "--Grid/MinClusterSize", "15",      # discard isolated noise clusters < n cells
     "--Rtabmap/TimeThr", "0",
     "--Rtabmap/DetectionRate", "1",
     "--Mem/STMSize", "30",
     "--Mem/InitWMWithAllNodes", "true",
-    "--Optimizer/Strategy", "0",    # 0=TORO (built-in); g2o unavailable on Ubuntu 22.04 ARM64
-    "--Optimizer/GravitySigma", "0", # disable gravity links – TORO doesn't support them and crashes
+    "--Optimizer/Strategy", "2",        # 2=GTSAM; override with 0=TORO if GTSAM unavailable
+    "--Optimizer/GravitySigma", "0.3",  # gravity constraints for VIO odometry (set 0 to disable)
     "--OdomF2M/MaxSize", "1000",
-    "--Vis/MaxDepth", "2.0",        # ignore features beyond 2m (reduces noise)
+    "--Vis/MaxDepth", "4.0",            # ignore features beyond 4 m
 ]
 
 # SuperPoint extractor + SuperGlue matcher (enabled with --superpoint)
@@ -79,7 +78,6 @@ SUPERPOINT_PARAMS = [
     "--SuperPoint/ModelPath", "/models/superpoint_v1.pt",
     "--Vis/CorNNType", "6",
     "--PyMatcher/Path", "/opt/SuperGluePretrainedNetwork/rtabmap_superglue.py",
-    "--PyMatcher/Model", "indoor",
     "--Vis/MinInliers", "15",
 ]
 
@@ -144,23 +142,26 @@ def image_exists(image: str) -> bool:
 def build_rtabmap_cmd(svo_filename: str, output_dir_in_container: str,
                       trim_start: float = 0.0, trim_end: float = 0.0,
                       quality: int = 5, superpoint: bool = False,
+                      superpoint_model: str = "indoor",
                       extra_params: list[str] | None = None) -> list[str]:
     """
     Build the rtabmap-zed_svo CLI command for offline RGBD-SLAM.
 
     rtabmap-zed_svo uses CameraStereoZed to open the SVO natively
-    through the ZED SDK, then runs F2M visual odometry + SLAM.
+    through the ZED SDK, then runs F2F (Frame-to-Frame) visual odometry + SLAM.
+    (Odom/Strategy 1 = F2F; override with 0 for F2M via extra_params)
     Output: <output_dir>/rtabmap.db
 
     extra_params override RTABMAP_PARAMS defaults (last --Param wins).
     """
+    sp_params = SUPERPOINT_PARAMS + ["--PyMatcher/Model", superpoint_model] if superpoint else []
     cmd = (
         ["rtabmap-zed_svo"]
         + ["--output", output_dir_in_container]
         + ["--output_name", "rtabmap"]
         + ["--quality", str(quality)]   # 0=NONE, 1=PERFORMANCE, 2=QUALITY, 3=ULTRA(deprecated), 4=NEURAL_LIGHT, 5=NEURAL, 6=NEURAL_PLUS
         + RTABMAP_PARAMS
-        + (SUPERPOINT_PARAMS if superpoint else [])
+        + sp_params
         + (extra_params or [])
     )
     if trim_start > 0:
@@ -303,6 +304,13 @@ def main() -> None:
         default=False,
         help="Use SuperPoint extractor + SuperGlue matcher for loop closure (requires models/ and Torch-enabled image).",
     )
+    parser.add_argument(
+        "--superpoint-model",
+        choices=["indoor", "outdoor"],
+        default="indoor",
+        dest="superpoint_model",
+        help="SuperGlue model variant. Only used with --superpoint (default: indoor).",
+    )
     args, extra = parser.parse_known_args()
 
     # --regen-grid implies --skip-slam and --skip-export: only the grid is rebuilt
@@ -353,22 +361,25 @@ def main() -> None:
         print(f"[INFO] Trim start : {args.trim_start}s")
         print(f"[INFO] Trim end   : {args.trim_end}s")
 
+    # Local binary override: mount host-compiled binary into the container
+    # to avoid rebuilding Docker for every code change.
+    local_bin = Path(__file__).resolve().parent.parent / "tools/ZedSvo/build/zed_svo"
+    local_bin_volume = ([("-v"), f"{local_bin}:/usr/local/bin/rtabmap-zed_svo:ro"]
+                        if local_bin.is_file() else [])
+    if local_bin.is_file():
+        print(f"[INFO] Using local binary: {local_bin}")
+
     # ---- Step 1: SLAM --------------------------------------------------
     if not args.skip_slam:
         rtabmap_cmd = build_rtabmap_cmd(svo_filename, "/output",
                                          args.trim_start, args.trim_end,
                                          args.quality, args.superpoint,
+                                         args.superpoint_model,
                                          rtabmap_extra_params)
-        # Fast-iteration override: if a locally compiled binary exists, mount it
-        # over the container's binary so docker build is not required.
-        local_bin = Path(__file__).resolve().parent.parent / "tools/ZedSvo/build/zed_svo"
-        slam_extra = []
+        slam_extra = list(local_bin_volume)
         if args.superpoint:
             slam_extra += ["-v", f"{Path.cwd()}/models:/models:ro"]
-            slam_extra += ["-v", f"{Path.cwd()}/models/superglue_indoor.pt:/opt/SuperGluePretrainedNetwork/models/weights/superglue_indoor.pth:ro"]
-        if local_bin.is_file():
-            print(f"[INFO] Using local binary: {local_bin}")
-            slam_extra += ["-v", f"{local_bin}:/usr/local/bin/rtabmap-zed_svo:ro"]
+            slam_extra += ["-v", f"{Path.cwd()}/models/superglue_{args.superpoint_model}.pt:/opt/SuperGluePretrainedNetwork/models/weights/superglue_{args.superpoint_model}.pth:ro"]
         run_step(
             image=args.image,
             data_host=data_host,
@@ -399,10 +410,7 @@ def main() -> None:
         if not db_path.is_file():
             print(f"[ERROR] rtabmap.db not found in {output_host}.", file=sys.stderr)
             sys.exit(1)
-        local_bin = Path(__file__).resolve().parent.parent / "tools/ZedSvo/build/zed_svo"
-        regen_extra = []
-        if local_bin.is_file():
-            regen_extra += ["-v", f"{local_bin}:/usr/local/bin/rtabmap-zed_svo:ro"]
+        regen_extra = list(local_bin_volume)
         run_step(
             image=args.image,
             data_host=data_host,
@@ -418,7 +426,7 @@ def main() -> None:
         export_extra = []
         if args.superpoint:
             export_extra += ["-v", f"{Path.cwd()}/models:/models:ro"]
-            export_extra += ["-v", f"{Path.cwd()}/models/superglue_indoor.pt:/opt/SuperGluePretrainedNetwork/models/weights/superglue_indoor.pth:ro"]
+            export_extra += ["-v", f"{Path.cwd()}/models/superglue_{args.superpoint_model}.pt:/opt/SuperGluePretrainedNetwork/models/weights/superglue_{args.superpoint_model}.pth:ro"]
         run_step(
             image=args.image,
             data_host=data_host,
