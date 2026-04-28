@@ -342,6 +342,15 @@ int main(int argc, char * argv[])
         printf("  Trim start    : %.1fs\n", trimStart);
         printf("  Trim end      : %.1fs\n", trimEnd);
     }
+    if(trimStart > 0.0f)
+    {
+        printf("\n  [WARN] --trim-start is set (%.1fs).\n", trimStart);
+        printf("         The ZED SDK positional tracking reads IMU data from frame 0\n");
+        printf("         regardless of trim-start. If the IMU data near frame 0 is\n");
+        printf("         noisy (vehicle vibration, abrupt motion), the gravity alignment\n");
+        printf("         step may hang indefinitely. If this occurs, try --trim-start 0\n");
+        printf("         and rely on RTAB-Map to discard early frames automatically.\n\n");
+    }
     if(!parameters.empty())
     {
         printf("  Parameters:\n");

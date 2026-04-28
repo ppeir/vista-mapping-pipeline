@@ -46,9 +46,9 @@ DEFAULT_IMAGE = "rtabmap_standalone:latest"
 #   Mem/STMSize 30               → Short-term memory size (nodes in RAM)
 #   Mem/InitWMWithAllNodes true  → load all nodes before graph optimisation
 #   Optimizer/Strategy 0         → TORO (g2o unavailable on ARM64)
-#   Rtabmap/DetectionRate 1      → attempt loop closure every frame
+#   Rtabmap/DetectionRate 1      → attempt loop closure 1 time per second
 RTABMAP_PARAMS = [
-    "--Odom/Strategy", "0",
+    "--Odom/Strategy", "1",
     "--RGBD/CreateOccupancyGrid", "true",
     "--Grid/3D", "false",
     "--Grid/RayTracing", "true",

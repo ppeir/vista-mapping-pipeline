@@ -47,6 +47,20 @@ def main(opt):
     if status > sl.ERROR_CODE.SUCCESS: 
         print("Camera Open", status, "Exit program.")
         exit(1)
+
+    # IMU warmup: grab frames without recording to let the IMU stabilize.
+    # Without this, the SVO starts with unreliable IMU data which causes
+    # the ZED SDK positional tracking to hang on gravity alignment during
+    # SLAM playback.
+    if opt.imu_warmup > 0:
+        runtime_warmup = sl.RuntimeParameters()
+        warmup_start = time.time()
+        warmup_frames = 0
+        print(f"IMU warmup: grabbing frames for {opt.imu_warmup}s before recording...")
+        while time.time() - warmup_start < opt.imu_warmup:
+            cam.grab(runtime_warmup)
+            warmup_frames += 1
+        print(f"IMU warmup done ({warmup_frames} frames grabbed).")
         
     recording_param = sl.RecordingParameters(opt.output_svo_file, sl.SVO_COMPRESSION_MODE.H265) # Enable recording with the filename specified in argument
     err = cam.enable_recording(recording_param)
@@ -68,10 +82,16 @@ if __name__ == "__main__":
     parser.add_argument('--output_svo_file', type=str, help='Path to the SVO file that will be written', required=True)
     parser.add_argument('--fps', type=int, default=None, choices=[15, 30, 60, 100],
                         help='Recording frame rate (15, 30, 60 or 100 fps). Default: camera native FPS.')
+    parser.add_argument('--wait', type=int, default=0, metavar='SEC',
+                        help='Wait N seconds before starting recording (default: 0).')
+    parser.add_argument('--imu-warmup', type=float, default=2.0, metavar='SEC',
+                        help='Grab frames for N seconds to let IMU stabilize before recording starts (default: 2.0).')
     opt = parser.parse_args()
     if not opt.output_svo_file.endswith((".svo", ".svo2")):
         print("--output_svo_file parameter should be a .svo file but is not : ",opt.output_svo_file,"Exit program.")
         exit()
 
-    time.sleep(30)
+    if opt.wait > 0:
+        print(f"Starting SVO recording in {opt.wait} seconds...")
+        time.sleep(opt.wait)
     main(opt)
