@@ -21,9 +21,13 @@ Usage:
 """
 
 import argparse
+import itertools
 import os
+import re
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -103,14 +107,66 @@ DEFAULT_RENDER = "cloud"
 # Helpers
 # ---------------------------------------------------------------------------
 
-def run(cmd: list[str], description: str) -> None:
+def _run_with_progress(cmd: list[str], description: str) -> subprocess.CompletedProcess:
+    """Run a command hiding its output and showing a progress bar instead."""
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    total: list[int] = [0]
+    current: list[int] = [0]
+    spinner = itertools.cycle(r"\|/-")
+
+    def _reader() -> None:
+        for line in proc.stdout:  # type: ignore[union-attr]
+            if m := re.search(r"SVO frames\s*:\s*(\d+)", line):
+                total[0] = int(m.group(1))
+            elif m := re.search(r"^\s+frame\s+(\d+)\s*:", line):
+                current[0] = int(m.group(1))
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+
+    bar_len = 40
+    start = time.time()
+    _is_tty = sys.stdout.isatty()
+    while proc.poll() is None:
+        elapsed = time.time() - start
+        if total[0] > 0:
+            pct = min(100, current[0] * 100 // total[0])
+            done = bar_len * pct // 100
+            bar = "=" * done + "-" * (bar_len - done)
+            status = f"[{bar}] {pct:3d}%  frame {current[0]}/{total[0]}  {elapsed:.0f}s"
+        else:
+            status = f"[{'=' * int(elapsed % bar_len):<{bar_len}}] {elapsed:.0f}s  ..."
+        if _is_tty:
+            sys.stdout.write(f"  {status}\r")
+        else:
+            sys.stdout.write(f"  {status}\n")
+        sys.stdout.flush()
+        time.sleep(0.3)
+
+    t.join()
+    if _is_tty:
+        sys.stdout.write(" " * 70 + "\r")
+        sys.stdout.flush()
+    return subprocess.CompletedProcess(cmd, proc.returncode)
+
+
+def run(cmd: list[str], description: str, verbose: bool = True) -> None:
     """Run a shell command and raise on failure."""
     print(f"\n{'='*60}")
     print(f"  {description}")
     print(f"{'='*60}")
-    print("  CMD:", " ".join(cmd))
-    print()
-    result = subprocess.run(cmd, check=False)
+    if verbose:
+        print("  CMD:", " ".join(cmd))
+        print()
+        result = subprocess.run(cmd, check=False)
+    else:
+        result = _run_with_progress(cmd, description)
     if result.returncode != 0:
         print(f"\n[ERROR] Command failed (exit code {result.returncode}): {description}",
               file=sys.stderr)
@@ -202,6 +258,7 @@ def run_step(
     cmd_in_container: list[str],
     description: str,
     extra_docker_args: list[str] | None = None,
+    verbose: bool = True,
 ) -> None:
     """
     Start a Docker container, run one command inside it, then remove it.
@@ -234,7 +291,7 @@ def run_step(
     docker_cmd.append(image)
     docker_cmd.extend(cmd_in_container)
 
-    run(docker_cmd, description)
+    run(docker_cmd, description, verbose=verbose)
 
 
 def main() -> None:
@@ -310,6 +367,12 @@ def main() -> None:
         default="indoor",
         dest="superpoint_model",
         help="SuperGlue model variant. Only used with --superpoint (default: indoor).",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Show full Docker/RTAB-Map output. Without this flag a progress bar is displayed.",
     )
     args, extra = parser.parse_known_args()
 
@@ -387,6 +450,7 @@ def main() -> None:
             cmd_in_container=rtabmap_cmd,
             description="Step 1/2 – rtabmap-zed_svo: RGBD-SLAM (ZED SDK VIO)",
             extra_docker_args=slam_extra,
+            verbose=args.verbose,
         )
         db_path = Path(output_host) / "rtabmap.db"
         if not db_path.is_file():
@@ -418,6 +482,7 @@ def main() -> None:
             cmd_in_container=build_regen_grid_cmd("/output", rtabmap_extra_params),
             description="regen-grid – Rebuild 2D map from existing DB",
             extra_docker_args=regen_extra,
+            verbose=args.verbose,
         )
 
     # ---- Step 2: Export 2-D occupancy map ------------------------------
@@ -434,6 +499,7 @@ def main() -> None:
             cmd_in_container=export_cmd,
             description=f"Step 2/2 – rtabmap-export: {args.render} export",
             extra_docker_args=export_extra,
+            verbose=args.verbose,
         )
     else:
         print("\n[SKIP] Skipping export step (--skip-export).")
