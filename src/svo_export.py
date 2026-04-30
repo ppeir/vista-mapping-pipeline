@@ -34,6 +34,7 @@ class AppType(enum.Enum):
     LEFT_AND_RIGHT = 1
     LEFT_AND_DEPTH = 2
     LEFT_AND_DEPTH_16 = 3
+    COMBINED_VIDEO_DEPTH_16 = 5
 
 
 def progress_bar(percent_done, bar_length=50):
@@ -55,14 +56,17 @@ def main(opt):
         app_type = AppType.LEFT_AND_DEPTH
     if opt.mode == 4:
         app_type = AppType.LEFT_AND_DEPTH_16
-    
+    if opt.mode == 5:
+        app_type = AppType.COMBINED_VIDEO_DEPTH_16
+
     # Check if exporting to AVI or SEQUENCE
-    if opt.mode !=0 and opt.mode !=1:
+    if opt.mode not in (0, 1, 5):
         output_as_video = False
 
     if not output_as_video and not os.path.isdir(output_dir):
-        sys.stdout.write(f"Input directory doesn't exist. Check permissions or create it: {output_dir}\n")
-        exit()
+        os.makedirs(output_dir, exist_ok=True)
+    if opt.mode == 5 and output_dir and not os.path.isdir(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
 
     # Specify SVO path parameter
     init_params = sl.InitParameters()
@@ -149,11 +153,17 @@ def main(opt):
     # Start SVO conversion to AVI/SEQUENCE
     sys.stdout.write("Converting SVO... Use Ctrl-C to interrupt conversion.\n")
 
+    first_ts_ns = None
+
     try:
         while True:
             err = zed.grab(rt_param)
             if err <= sl.ERROR_CODE.SUCCESS:
                 svo_position = zed.get_svo_position()
+                ts_ns = zed.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_nanoseconds()
+                if first_ts_ns is None:
+                    first_ts_ns = ts_ns
+                rel_ts = (ts_ns - first_ts_ns) / 1e9
 
                 # Stop early if trim-end reached
                 if svo_position >= end_frame:
@@ -166,7 +176,7 @@ def main(opt):
                     zed.retrieve_image(right_image, sl.VIEW.RIGHT)
                 elif app_type == AppType.LEFT_AND_DEPTH:
                     zed.retrieve_image(right_image, sl.VIEW.DEPTH)
-                elif app_type == AppType.LEFT_AND_DEPTH_16:
+                elif app_type in (AppType.LEFT_AND_DEPTH_16, AppType.COMBINED_VIDEO_DEPTH_16):
                     zed.retrieve_measure(depth_image, sl.MEASURE.DEPTH)
 
                 if output_as_video:
@@ -185,6 +195,20 @@ def main(opt):
                     # Write the RGB image in the video
                     assert video_writer is not None
                     video_writer.write(ocv_image_rgb)
+                    # Mode 5: also save depth PNG alongside video
+                    if app_type == AppType.COMBINED_VIDEO_DEPTH_16 and output_dir:
+                        raw = np.nan_to_num(depth_image.get_data(), nan=0.0, posinf=0.0, neginf=0.0)
+                        raw[raw < 0] = 0.0
+                        raw = np.squeeze(raw).astype(np.uint16)
+                        if opt.depth_scale != 1.0:
+                            dh = max(1, int(round(height * opt.depth_scale)))
+                            dw = max(1, int(round(width * opt.depth_scale)))
+                            raw = cv2.resize(raw, (dw, dh), interpolation=cv2.INTER_NEAREST)
+                        cv2.imwrite(
+                            os.path.join(output_dir, f"{rel_ts:.3f}.png"),
+                            raw,
+                            [cv2.IMWRITE_PNG_COMPRESSION, opt.depth_compression],
+                        )
                 else:
                     # Generate file names
                     if opt.side in ('both', 'left'):
@@ -192,14 +216,22 @@ def main(opt):
                         # Save Left images
                         cv2.imwrite(str(filename1), left_image.get_data())
                     if opt.side in ('both', 'right'):
-                        filename2 = output_dir + "/" + (("right%s.png" if app_type == AppType.LEFT_AND_RIGHT
-                                                   else "depth%s.png") % str(svo_position).zfill(6))
-                        if app_type != AppType.LEFT_AND_DEPTH_16:
-                            # Save right images
+                        if app_type == AppType.LEFT_AND_RIGHT:
+                            filename2 = os.path.join(output_dir, "right%s.png" % str(svo_position).zfill(6))
                             cv2.imwrite(str(filename2), right_image.get_data())
-                        else:
-                            # Save depth images (convert to uint16)
-                            cv2.imwrite(str(filename2), depth_image.get_data().astype(np.uint16))
+                        elif app_type == AppType.LEFT_AND_DEPTH:
+                            filename2 = os.path.join(output_dir, f"{rel_ts:.3f}.png")
+                            cv2.imwrite(str(filename2), right_image.get_data())
+                        elif app_type == AppType.LEFT_AND_DEPTH_16:
+                            filename2 = os.path.join(output_dir, f"{rel_ts:.3f}.png")
+                            raw = np.nan_to_num(depth_image.get_data(), nan=0.0, posinf=0.0, neginf=0.0)
+                            raw[raw < 0] = 0.0
+                            raw = np.squeeze(raw).astype(np.uint16)
+                            if opt.depth_scale != 1.0:
+                                dh = max(1, int(round(height * opt.depth_scale)))
+                                dw = max(1, int(round(width * opt.depth_scale)))
+                                raw = cv2.resize(raw, (dw, dh), interpolation=cv2.INTER_NEAREST)
+                            cv2.imwrite(str(filename2), raw, [cv2.IMWRITE_PNG_COMPRESSION, opt.depth_compression])
 
                 # Display progress
                 progress_bar((svo_position - start_frame + 1) / export_frames * 100, 30)
@@ -238,7 +270,7 @@ def main(opt):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('--mode', type = int, required=True, help= " Mode 0 is to export LEFT+RIGHT AVI. \n Mode 1 is to export LEFT+DEPTH_VIEW Avi. \n Mode 2 is to export LEFT+RIGHT image sequence. \n Mode 3 is to export LEFT+DEPTH_View image sequence. \n Mode 4 is to export LEFT+DEPTH_16BIT image sequence.")
+    parser.add_argument('--mode', type = int, required=True, help=" Mode 0: LEFT+RIGHT video.\n Mode 1: LEFT+DEPTH_VIEW video.\n Mode 2: LEFT+RIGHT image sequence.\n Mode 3: LEFT+DEPTH_VIEW image sequence.\n Mode 4: LEFT+DEPTH_16BIT image sequence.\n Mode 5: LEFT video + DEPTH_16BIT sequence (combined, single SVO pass).")
     parser.add_argument('--input_svo_file', type=str, required=True, help='Path to the .svo file')
     parser.add_argument('--output_file', type=str, help='Path to the output video file (.mp4 or .avi), required for modes 0 and 1.', default='')
     parser.add_argument('--output_path_dir', type=str, help='Path to a directory, where .png will be written, if mode includes image sequence export', default='')
@@ -248,9 +280,14 @@ if __name__ == "__main__":
                         help='Skip the first N seconds of the SVO (default: 0).')
     parser.add_argument('--trim-end', type=float, default=0.0,
                         help='Skip the last N seconds of the SVO (default: 0).')
+    parser.add_argument('--depth-scale', type=float, default=1.0,
+                        help='Scale factor for depth image resolution (e.g. 0.5 → half size). Default: 1.0.')
+    parser.add_argument('--depth-compression', type=int, default=5, choices=range(10),
+                        metavar='[0-9]',
+                        help='PNG compression level for depth images (0=none, 9=max). Default: 5.')    
     opt = parser.parse_args()
-    if opt.mode > 4 or opt.mode < 0 :
-        print("Mode shoud be between 0 and 4 included. \n Mode 0 is to export LEFT+RIGHT AVI. \n Mode 1 is to export LEFT+DEPTH_VIEW Avi. \n Mode 2 is to export LEFT+RIGHT image sequence. \n Mode 3 is to export LEFT+DEPTH_View image sequence. \n Mode 4 is to export LEFT+DEPTH_16BIT image sequence.")
+    if opt.mode not in (0, 1, 2, 3, 4, 5):
+        print("Mode should be 0-5.\n 0: LEFT+RIGHT video\n 1: LEFT+DEPTH_VIEW video\n 2: LEFT+RIGHT sequence\n 3: LEFT+DEPTH_VIEW sequence\n 4: LEFT+DEPTH_16BIT sequence\n 5: LEFT+RIGHT video + DEPTH_16BIT sequence (combined)")
         exit()
     if not opt.input_svo_file.endswith((".svo", ".svo2")):
         print("--input_svo_file parameter should be a .svo file but is not : ",opt.input_svo_file,"Exit program.")
@@ -258,16 +295,15 @@ if __name__ == "__main__":
     if not os.path.isfile(opt.input_svo_file):
         print("--input_svo_file parameter should be an existing file but is not : ",opt.input_svo_file,"Exit program.")
         exit()
-    if opt.mode < 2 and len(opt.output_file) == 0:
-        print("In mode ", opt.mode, ", --output_file parameter needs to be specified.")
+    if opt.mode in (0, 1, 5) and len(opt.output_file) == 0:
+        print(f"In mode {opt.mode}, --output_file parameter needs to be specified.")
         exit()
-    if opt.mode < 2 and not opt.output_file.endswith((".mp4", ".avi")):
+    if opt.mode in (0, 1, 5) and not opt.output_file.endswith((".mp4", ".avi")):
         print("--output_file parameter should be a .mp4 or .avi file but is not : ", opt.output_file, "Exit program.")
         exit()
-    if opt.mode >=2  and len(opt.output_path_dir)==0 :
-        print("In mode ",opt.mode,", output_path_dir parameter needs to be specified.")
+    if opt.mode in (2, 3, 4, 5) and len(opt.output_path_dir) == 0:
+        print(f"In mode {opt.mode}, --output_path_dir parameter needs to be specified.")
         exit()
-    if opt.mode >=2 and not os.path.isdir(opt.output_path_dir):
-        print("--output_path_dir parameter should be an existing folder but is not : ",opt.output_path_dir,"Exit program.")
-        exit()
+    if opt.mode in (2, 3, 4, 5) and not os.path.isdir(opt.output_path_dir):
+        os.makedirs(opt.output_path_dir, exist_ok=True)
     main(opt)

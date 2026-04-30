@@ -161,6 +161,13 @@ def main() -> None:
                         help="Skip SLAM step (rtabmap.db + cloud must already exist).")
     parser.add_argument("--skip-video", action="store_true",
                         help="Skip video export step (MP4 must already exist).")
+    parser.add_argument("--depth", action="store_true",
+                        help="Export depth PNG sequence alongside video (mode 5, single SVO pass).")
+    parser.add_argument("--depth-scale", type=float, default=1.0, dest="depth_scale",
+                        help="Scale factor for depth images (e.g. 0.5 = half resolution).")
+    parser.add_argument("--depth-compression", type=int, default=5, dest="depth_compression",
+                        metavar="[0-9]",
+                        help="PNG compression level for depth images (0=none, 9=max, default: 5).")
 
     args, extra = parser.parse_known_args()  # extra → forwarded to process_svo.py
 
@@ -182,15 +189,28 @@ def main() -> None:
         print("\n[SKIP] SLAM step.")
 
     if not args.skip_video:
+        depth_dir = output_path / "depth" if args.depth else None
+        svo_export_cmd = [
+            sys.executable, str(SRC_DIR / "svo_export.py"),
+            "--input_svo_file", str(svo_path),
+            "--output_file", str(mp4_path),
+            "--side", args.side,
+        ]
+        if args.depth and depth_dir is not None:
+            svo_export_cmd += [
+                "--mode", "5",
+                "--output_path_dir", str(depth_dir),
+                "--depth-scale", str(args.depth_scale),
+                "--depth-compression", str(args.depth_compression),
+            ]
+        else:
+            svo_export_cmd += ["--mode", "0"]
         parallel_jobs.append((
-            [sys.executable, str(SRC_DIR / "svo_export.py"),
-             "--mode", "0",
-             "--input_svo_file", str(svo_path),
-             "--output_file", str(mp4_path),
-             "--side", args.side],
+            svo_export_cmd,
             "Step 2/5 – Video export  →  svo_export.py",
         ))
     else:
+        depth_dir = None
         print("\n[SKIP] Video export step.")
 
     if parallel_jobs:

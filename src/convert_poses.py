@@ -1,8 +1,8 @@
 import json
 import math
 
-INPUT_FILE = "data/outputs/outdoor_07/rtabmap_poses.txt"
-OUTPUT_FILE = "data/outputs/outdoor_07/positions.json"
+INPUT_FILE = "data/outputs/outdoor_09/rtabmap_poses.txt"
+OUTPUT_FILE = "data/outputs/outdoor_09/positions.json"
 
 # Align the trajectory with the 2D plane
 GLOBAL_YAW_DEG = 90.0
