@@ -69,13 +69,15 @@ def main(opt):
         exit(1)
 
     runtime = sl.RuntimeParameters()
-    print("SVO is Recording, use Ctrl-C to stop.") # Start recording SVO, stop with Ctrl-C command
+    print("SVO is Recording, use Ctrl-C to stop.")  # Start recording SVO, stop with Ctrl-C command
     frames_recorded = 0
+    LOG_INTERVAL = 10  # print every N frames
 
     while True:
-        if cam.grab(runtime) <= sl.ERROR_CODE.SUCCESS : # Check that a new image is successfully acquired
+        if cam.grab(runtime) <= sl.ERROR_CODE.SUCCESS:  # Check that a new image is successfully acquired
             frames_recorded += 1
-            print("Frame count: " + str(frames_recorded), end="\r")
+            if frames_recorded == 1 or frames_recorded % LOG_INTERVAL == 0:
+                print(f"Frame count: {frames_recorded}", flush=True)
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

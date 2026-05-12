@@ -8,9 +8,13 @@ __pycache__/
 tools/ZedSvo/build/
 test_01/
 data/
-*.svo
-*.svo2
 models/
 *.avi
 *.pgm
 .history/
+
+# Frontend build output
+backend/static/
+
+# Frontend dependencies
+frontend/node_modules/

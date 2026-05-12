@@ -37,12 +37,7 @@ class AppType(enum.Enum):
     COMBINED_VIDEO_DEPTH_16 = 5
 
 
-def progress_bar(percent_done, bar_length=50):
-    #Display a progress bar
-    done_length = int(bar_length * percent_done / 100)
-    bar = '=' * done_length + '-' * (bar_length - done_length)
-    sys.stdout.write('[%s] %i%s\r' % (bar, percent_done, '%'))
-    sys.stdout.flush()
+LOG_INTERVAL = 50  # print progress every N exported frames
 
 
 def main(opt):
@@ -236,11 +231,13 @@ def main(opt):
                                 raw = cv2.resize(raw, (dw, dh), interpolation=cv2.INTER_NEAREST)
                             cv2.imwrite(str(filename2), raw, [cv2.IMWRITE_PNG_COMPRESSION, opt.depth_compression])
 
-                # Display progress
-                progress_bar((svo_position - start_frame + 1) / export_frames * 100, 30)
+                done = svo_position - start_frame + 1
+                if done == 1 or done % LOG_INTERVAL == 0 or done == export_frames:
+                    pct = done / export_frames * 100
+                    sys.stdout.write(f"[frame {done}/{export_frames} | {pct:.1f}% | {rel_ts:.1f}s]\n")
+                    sys.stdout.flush()
             if err == sl.ERROR_CODE.END_OF_SVOFILE_REACHED:
-                progress_bar(100, 30)
-                sys.stdout.write("\nSVO end has been reached. Exiting now.\n")
+                sys.stdout.write("SVO end has been reached. Exiting now.\n")
                 break
     except KeyboardInterrupt:
         sys.stdout.write("\nInterrupted by user.\n")

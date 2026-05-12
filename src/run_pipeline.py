@@ -276,7 +276,7 @@ def main() -> None:
     parser.add_argument("--skip-video", action="store_true",
                         help="Skip video export step (MP4 must already exist).")
     parser.add_argument("--depth", action="store_true", default=True,
-                        help="Export depth PNG sequence alongside video (mode 5, single SVO pass). Default: enabled.")
+                        help="Export depth PNG sequence alongside video (mode 5, single SVO pass). (default: enabled)")
     parser.add_argument("--no-depth", action="store_false", dest="depth",
                         help="Disable depth PNG export.")
     parser.add_argument("--depth-scale", type=float, default=1.0, dest="depth_scale",
@@ -284,6 +284,9 @@ def main() -> None:
     parser.add_argument("--depth-compression", type=int, default=5, dest="depth_compression",
                         metavar="[0-9]",
                         help="PNG compression level for depth images (0=none, 9=max, default: 5).")
+    parser.add_argument("--map-choice", type=int, choices=[1, 2], default=None, dest="map_choice",
+                        help="Non-interactive map selection: 1=RTAB-Map built-in, 2=manual projection. "
+                             "If omitted, an interactive prompt is shown.")
 
     args, cli_extra = parser.parse_known_args()  # cli_extra → forwarded to process_svo.py
 
@@ -391,7 +394,21 @@ def main() -> None:
     )
 
     # Step 5: Map choice + ZIP
-    final_pgm, final_yaml = ask_map_choice(output_path / "map.pgm", manual_pgm)
+    if args.map_choice is not None:
+        if args.map_choice == 1:
+            final_pgm = output_path / "map.pgm"
+            if not final_pgm.is_file():
+                print(f"[ERROR] map.pgm not found: {final_pgm}", file=sys.stderr)
+                sys.exit(1)
+            final_yaml = final_pgm.with_suffix(".yaml")
+        else:
+            if not manual_pgm.is_file():
+                print(f"[ERROR] map_manual.pgm not found: {manual_pgm}", file=sys.stderr)
+                sys.exit(1)
+            final_pgm = manual_pgm
+            final_yaml = manual_pgm.with_suffix(".yaml")
+    else:
+        final_pgm, final_yaml = ask_map_choice(output_path / "map.pgm", manual_pgm)
 
     zip_path = output_path / f"{output_name}.zip"
     print(f"\n{'='*60}\n  Step 6/6 – Creating ZIP\n{'='*60}")

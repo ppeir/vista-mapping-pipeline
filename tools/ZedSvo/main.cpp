@@ -587,33 +587,23 @@ int main(int argc, char * argv[])
 
         ++iteration;
 
-        if(!quiet || (iteration % 100 == 0))
+        bool loopNow = (rtabmap.getLoopClosureId() > 0);
+        if(loopNow || (!quiet && iteration % 10 == 0))
         {
-            double slamTime = timer.ticks();
-
-            if(rtabmap.getLoopClosureId() > 0)
+            int refTotal = (trimEndFrameNum > 0) ? trimEndFrameNum : svoTotalFrames;
+            double pct   = (refTotal > 0) ? 100.0 * totalFramesSeen / refTotal : 0.0;
+            double elapsedSecs = totalTime.elapsed();
+            char remaining[32] = "";
+            if(pct > 1.0 && pct < 99.0)
             {
-                printf("  frame %d: cam=%dms odom(q=%d/%d kfs=%d)=%dms slam=%dms *LOOP*\n",
-                    iteration,
-                    int(cameraInfo.timeTotal * 1000.0f),
-                    odomInfo.reg.inliers, odomInfo.features, odomKeyFrames,
-                    int(odomInfo.timeEstimation * 1000.0f),
-                    int(slamTime * 1000.0f));
+                snprintf(remaining, sizeof(remaining), " | ~%ds left",
+                         (int)(elapsedSecs * (100.0 - pct) / pct));
             }
-            else if(!quiet)
-            {
-                printf("  frame %d: cam=%dms odom(q=%d/%d kfs=%d)=%dms slam=%dms\n",
-                    iteration,
-                    int(cameraInfo.timeTotal * 1000.0f),
-                    odomInfo.reg.inliers, odomInfo.features, odomKeyFrames,
-                    int(odomInfo.timeEstimation * 1000.0f),
-                    int(slamTime * 1000.0f));
-            }
-            fflush(stdout);
-        }
-        else if(iteration % 50 == 0)
-        {
-            printf(".");
+            printf("[frame %d/~%d | %.1f%% | kf=%d lc=%d | %.0fs%s]%s\n",
+                totalFramesSeen, refTotal, pct,
+                odomKeyFrames, loopClosures,
+                elapsedSecs, remaining,
+                loopNow ? " *LOOP*" : "");
             fflush(stdout);
         }
 
