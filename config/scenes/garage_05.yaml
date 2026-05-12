@@ -1,0 +1,3 @@
+preset: garage
+svo: ./data/raw/garage_05.svo2
+output: ./data/outputs/garage_05

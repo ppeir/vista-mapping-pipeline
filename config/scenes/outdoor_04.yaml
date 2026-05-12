@@ -1,0 +1,5 @@
+preset: outdoor
+svo: ./data/raw/outdoor_04.svo2
+output: ./data/outputs/outdoor_04
+rtabmap:
+  Rtabmap/DetectionRate: 1.5

@@ -1,0 +1,6 @@
+preset: indoor
+svo: ./data/raw/rdc_07.svo2
+output: ./data/outputs/rdc_07
+rtabmap:
+  Grid/MaxGroundHeight: 0.1
+  Grid/MaxObstacleHeight: 1.8

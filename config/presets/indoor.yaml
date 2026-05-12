@@ -1,0 +1,39 @@
+# Preset: indoor corridor / office scan (RDC type)
+# Short depth range, tight grid resolution, higher loop-closure detection rate.
+
+# --- run_pipeline.py pipeline args ---
+side: right
+resolution: 0.05
+min_z: 0.0
+max_z: 2.0
+depth: true
+depth_scale: 1.0
+depth_compression: 5
+
+# --- process_svo.py args ---
+render: cloud
+superpoint: true
+quality: 5
+trim_start: 0.0
+trim_end: 0.0
+regen_grid: false
+
+# --- RTAB-Map params ---
+rtabmap:
+  Optimizer/Strategy: 2
+  Optimizer/GravitySigma: 0.3
+  RGBD/OptimizeMaxError: 3.0
+  Vis/MinInliers: 15
+  Vis/MaxDepth: 4.0
+  RGBD/LoopClosureReextractFeatures: "true"
+  Mem/STMSize: 10
+  Mem/RehearsalSimilarity: 0.45
+  Grid/MapFrameProjection: "true"
+  Grid/NormalsSegmentation: "false"
+  Grid/MaxGroundHeight: 0.1
+  Grid/MaxObstacleHeight: 1.8
+  Grid/CellSize: 0.05
+  Grid/RayTracing: "false"
+  Kp/MaxFeatures: 1000
+  Rtabmap/LoopRatio: 0.7
+  Rtabmap/DetectionRate: 2.0

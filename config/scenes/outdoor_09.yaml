@@ -1,0 +1,3 @@
+preset: outdoor
+svo: ./data/raw/outdoor_09.svo2
+output: ./data/outputs/outdoor_09-2

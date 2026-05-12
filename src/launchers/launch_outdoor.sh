@@ -1,0 +1,21 @@
+python3 src/process_svo.py \
+  --svo ./data/raw/outdoor_02.svo2 \
+  --output ./data/outputs/outdoor_02-2 \
+  --trim-end 58 \
+  --render cloud \
+  --superpoint \
+  --Optimizer/Strategy 2 \
+  --Optimizer/GravitySigma 0.3 \
+  --RGBD/OptimizeMaxError 3.0 \
+  --Vis/MinInliers 15 \
+  --Vis/MaxDepth 4.0 \
+  --RGBD/LoopClosureReextractFeatures true \
+  --Mem/STMSize 50 \
+  --quality 5 \
+  --Grid/MinObstacleHeight 0.15 \
+  --Grid/MaxObstacleHeight 2.0 \
+  --Grid/CellSize 0.02  \
+  --Grid/MinClusterSize 40 \
+  --Kp/MaxFeatures 1000 \
+  --Rtabmap/LoopRatio 0.9 \
+#   --regen-grid

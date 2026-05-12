@@ -1,0 +1,25 @@
+python3 src/process_svo.py \
+  --svo ./data/raw/garage_06.svo2 \
+  --output ./data/outputs/garage_06 \
+  --render cloud \
+  --superpoint \
+  --Optimizer/Strategy 2 \
+  --Optimizer/GravitySigma 0.3 \
+  --RGBD/OptimizeMaxError 5.0 \
+  --Vis/MinInliers 10 \
+  --Vis/MaxDepth 10.0 \
+  --RGBD/LoopClosureReextractFeatures true \
+  --Mem/STMSize 10 \
+  --quality 5 \
+  --Grid/MapFrameProjection true \
+  --Grid/NormalsSegmentation false \
+  --Grid/MaxGroundHeight 0.4 \
+  --Grid/MaxObstacleHeight 1.2 \
+  --Grid/CellSize 0.01 \
+  --Grid/RayTracing false \
+  --Grid/MinClusterSize 40 \
+  --Kp/MaxFeatures 2000 \
+  --Rtabmap/LoopRatio 0.65 \
+  --Rtabmap/DetectionRate 2.0 \
+  --regen-grid
+  # --Rtabmap/LoopThr 1.0 \

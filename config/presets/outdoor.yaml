@@ -1,0 +1,40 @@
+# Preset: outdoor floor scan (robot on ground, obstacles = walls / furniture)
+# Typical use: exterior / semi-exterior wide spaces, ZED pointing forward.
+
+# --- run_pipeline.py pipeline args ---
+side: right
+resolution: 0.05
+min_z: 0.4
+max_z: 1.2
+depth: true
+depth_scale: 0.75
+depth_compression: 5
+
+# --- process_svo.py args ---
+render: cloud
+superpoint: true
+quality: 5
+trim_start: 0.0
+trim_end: 0.0
+regen_grid: false
+
+# --- RTAB-Map params (forwarded verbatim as --Key/Sub value) ---
+rtabmap:
+  Optimizer/Strategy: 2
+  Optimizer/GravitySigma: 0.3
+  RGBD/OptimizeMaxError: 3.0
+  Vis/MinInliers: 10
+  Vis/MaxDepth: 8.0
+  RGBD/LoopClosureReextractFeatures: "true"
+  Mem/STMSize: 10
+  Grid/MapFrameProjection: "true"
+  Grid/NormalsSegmentation: "false"
+  Grid/MaxGroundHeight: 0.4
+  Grid/MaxObstacleHeight: 1.2
+  Grid/CellSize: 0.05
+  Grid/RayTracing: "false"
+  Grid/MinClusterSize: 20
+  Grid/ClusterRadius: 0.05
+  Kp/MaxFeatures: 2000
+  Rtabmap/LoopRatio: 0.65
+  Rtabmap/DetectionRate: 1.5

@@ -1,0 +1,16 @@
+# outdoor_03: ceiling scan - robot scans from above, obstacles = ceiling
+# Obstacle heights are negative (camera looks up at the ceiling)
+preset: outdoor
+svo: ./data/raw/outdoor_03.svo2
+output: ./data/outputs/outdoor_03
+min_z: -0.8
+max_z: -0.1
+regen_grid: true
+
+rtabmap:
+  Grid/MinObstacleHeight: -0.7
+  Grid/MaxObstacleHeight: -0.2
+  Grid/MaxGroundHeight: -0.9   # override preset value
+  Grid/CellSize: 0.01
+  Grid/ClusterRadius: 0.05
+  Rtabmap/DetectionRate: 1.0

@@ -1,0 +1,39 @@
+# Preset: garage / large indoor space
+# Wide depth range, high feature count, fine grid, slow detection rate.
+
+# --- run_pipeline.py pipeline args ---
+side: right
+resolution: 0.05
+min_z: 0.0
+max_z: 2.0
+depth: true
+depth_scale: 1.0
+depth_compression: 5
+
+# --- process_svo.py args ---
+render: cloud
+superpoint: true
+quality: 5
+trim_start: 0.0
+trim_end: 0.0
+regen_grid: false
+
+# --- RTAB-Map params ---
+rtabmap:
+  Optimizer/Strategy: 2
+  Optimizer/GravitySigma: 0.3
+  RGBD/OptimizeMaxError: 5.0
+  Vis/MinInliers: 10
+  Vis/MaxDepth: 10.0
+  RGBD/LoopClosureReextractFeatures: "true"
+  Mem/STMSize: 10
+  Grid/MapFrameProjection: "true"
+  Grid/NormalsSegmentation: "false"
+  Grid/MaxGroundHeight: 0.4
+  Grid/MaxObstacleHeight: 1.2
+  Grid/CellSize: 0.01
+  Grid/RayTracing: "false"
+  Grid/MinClusterSize: 40
+  Kp/MaxFeatures: 2000
+  Rtabmap/LoopRatio: 0.65
+  Rtabmap/DetectionRate: 2.0

@@ -1,0 +1,23 @@
+python3 src/process_svo.py \
+  --svo ./data/raw/rdc_02.svo2 \
+  --output ./data/outputs/rdc_02 \
+  --render cloud \
+  --superpoint \
+  --Optimizer/Strategy 2 \
+  --Optimizer/GravitySigma 0.3 \
+  --RGBD/OptimizeMaxError 3.0 \
+  --Vis/MinInliers 15 \
+  --Vis/MaxDepth 4.0 \
+  --RGBD/LoopClosureReextractFeatures true \
+  --Mem/STMSize 10 \
+  --quality 5 \
+  --Grid/MinObstacleHeight 0.15 \
+  --Grid/MaxObstacleHeight 2.0 \
+  --Grid/CellSize 0.01 \
+  --Grid/MinClusterSize 20 \
+  --Kp/MaxFeatures 1000 \
+  --Rtabmap/LoopRatio 0.7 \
+  --Rtabmap/DetectionRate 2.0 \
+  --Mem/RehearsalSimilarity 0.45 \
+  --regen-grid
+  # --Rtabmap/LoopThr 1.0 \
