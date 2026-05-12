@@ -180,7 +180,10 @@ def main(opt):
                     zed.retrieve_measure(depth_image, sl.MEASURE.DEPTH)
 
                 if output_as_video:
-                    if opt.side == 'both':
+                    if app_type == AppType.COMBINED_VIDEO_DEPTH_16:
+                        # Mode 5: right image not retrieved, always use left
+                        frame_rgba = left_image.get_data()
+                    elif opt.side == 'both':
                         # Copy the left image to the left side of SBS image
                         svo_image_sbs_rgba[0:height, 0:width, :] = left_image.get_data()
                         # Copy the right image to the right side of SBS image
@@ -197,8 +200,8 @@ def main(opt):
                     video_writer.write(ocv_image_rgb)
                     # Mode 5: also save depth PNG alongside video
                     if app_type == AppType.COMBINED_VIDEO_DEPTH_16 and output_dir:
-                        raw = np.nan_to_num(depth_image.get_data(), nan=0.0, posinf=0.0, neginf=0.0)
-                        raw[raw < 0] = 0.0
+                        raw = np.nan_to_num(depth_image.get_data(), nan=65535.0, posinf=65535.0, neginf=65535.0)
+                        raw[raw < 0] = 65535.0
                         raw = np.squeeze(raw).astype(np.uint16)
                         if opt.depth_scale != 1.0:
                             dh = max(1, int(round(height * opt.depth_scale)))
@@ -224,8 +227,8 @@ def main(opt):
                             cv2.imwrite(str(filename2), right_image.get_data())
                         elif app_type == AppType.LEFT_AND_DEPTH_16:
                             filename2 = os.path.join(output_dir, f"{rel_ts:.3f}.png")
-                            raw = np.nan_to_num(depth_image.get_data(), nan=0.0, posinf=0.0, neginf=0.0)
-                            raw[raw < 0] = 0.0
+                            raw = np.nan_to_num(depth_image.get_data(), nan=65535.0, posinf=65535.0, neginf=65535.0)
+                            raw[raw < 0] = 65535.0
                             raw = np.squeeze(raw).astype(np.uint16)
                             if opt.depth_scale != 1.0:
                                 dh = max(1, int(round(height * opt.depth_scale)))
