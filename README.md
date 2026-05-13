@@ -104,12 +104,12 @@ docker build \
     .
 ```
 
-### 3. Set up the Python virtual environment
+### 3. Install Python dependencies
+
+The backend uses **system Python** (no virtual environment). The ZED SDK installs `pyzed` globally to expose CUDA and TensorRT drivers — isolating it inside a standard venv would break those native bindings.
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
 ### 4. Build the frontend
@@ -124,8 +124,7 @@ cd ..
 ### 5. Start the server
 
 ```bash
-source .venv/bin/activate
-uvicorn backend.main:app --host 0.0.0.0 --port 8080
+python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8080
 ```
 
 The app is now available at `http://<jetson-ip>:8080`.
@@ -157,6 +156,76 @@ http://jetson.local:8080
 ```
 
 > **Tip:** bookmark the URL on the smartphone home screen for one-tap access.
+
+---
+
+## Autostart & Background Service (systemd)
+
+For headless field deployment, run Vista Mapper as a systemd service so it starts automatically at boot and restarts on failure — no terminal session required.
+
+### 1. Create the service unit
+
+Create `/etc/systemd/system/vista-mapper.service`:
+
+```ini
+[Unit]
+Description=Vista Mapper – SLAM pipeline web interface
+After=network.target
+
+[Service]
+Type=simple
+User=jetson
+WorkingDirectory=/home/jetson/jetson/zed2i/vista-mapping-pipeline
+ExecStart=/usr/bin/python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> Adjust `User` and `WorkingDirectory` if your username or repository path differs.
+
+### 2. Enable and start the service
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable vista-mapper
+sudo systemctl start  vista-mapper
+```
+
+Check that it is running:
+
+```bash
+sudo systemctl status vista-mapper
+```
+
+View live logs:
+
+```bash
+journalctl -u vista-mapper -f
+```
+
+### 3. Shell aliases for quick control
+
+Add the following lines to `~/.bashrc` (or `~/.zshrc`) for single-word commands:
+
+```bash
+# Vista Mapper service shortcuts
+alias vista-mapper-start='sudo systemctl start  vista-mapper'
+alias vista-mapper-stop='sudo systemctl stop   vista-mapper'
+alias vista-mapper-log='journalctl -u vista-mapper -f'
+```
+
+Reload the shell:
+
+```bash
+source ~/.bashrc
+```
+
+You can now run `vista-mapper-start` and `vista-mapper-stop` from any terminal.
 
 ---
 
