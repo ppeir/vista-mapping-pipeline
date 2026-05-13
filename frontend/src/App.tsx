@@ -6,6 +6,11 @@ import toast, { Toaster } from 'react-hot-toast'
 type RecordStatus = 'idle' | 'recording' | 'done' | 'error'
 type PipelineStatus = 'idle' | 'running' | 'done' | 'error'
 
+interface SvoFile {
+  name: string
+  date: string
+}
+
 interface PipelinePayload {
   config: string
   svo_stem: string
@@ -246,11 +251,11 @@ export default function App() {
 
   // ── Pipeline state ─────────────────────────────────────────────
   const [configs, setConfigs] = useState<string[]>([])
-  const [svos, setSvos] = useState<string[]>([])
+  const [svos, setSvos] = useState<SvoFile[]>([])
   const [selectedConfig, setSelectedConfig] = useState('')
   const [selectedSvo, setSelectedSvo] = useState('')
   const [outputName, setOutputName] = useState('')
-  const [mapChoice, setMapChoice] = useState<'1' | '2'>('1')
+  const [mapChoice, setMapChoice] = useState<'1' | '2'>('2')
   const [presetParams, setPresetParams] = useState<ParamDef[]>([])
   const [paramValues, setParamValues] = useState<Record<string, string>>({})
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -270,8 +275,8 @@ export default function App() {
 
   // ── Load configs and restore process states on mount ───────────
   const fetchSvos = () =>
-    apiGet<{ svos: string[] }>('/api/svos')
-      .then(d => { setSvos(d.svos); if (d.svos.length > 0 && !selectedSvo) setSelectedSvo(d.svos[0]) })
+    apiGet<{ svos: SvoFile[] }>('/api/svos')
+      .then(d => { setSvos(d.svos); if (d.svos.length > 0 && !selectedSvo) setSelectedSvo(d.svos[0].name) })
       .catch(console.error)
 
   useEffect(() => {
@@ -636,7 +641,7 @@ export default function App() {
               disabled={isPipelineRunning}
             >
               <option value="">— select —</option>
-              {svos.map(s => <option key={s} value={s}>{s}.svo2</option>)}
+              {svos.map(s => <option key={s.name} value={s.name}>{s.name}.svo2 ({s.date})</option>)}
             </select>
           </div>
 

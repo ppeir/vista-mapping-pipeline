@@ -11,7 +11,9 @@ GET  /api/download/{name}   - serve the generated ZIP for download
 
 import asyncio
 import logging
+import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -62,8 +64,11 @@ async def list_svos():
     raw_dir = REPO_ROOT / "data" / "raw"
     if not raw_dir.is_dir():
         return {"svos": []}
-    stems = sorted(p.stem for p in raw_dir.glob("*.svo2"))
-    return {"svos": stems}
+    files = []
+    for p in sorted(raw_dir.glob("*.svo2"), key=lambda x: x.name):
+        mtime = datetime.fromtimestamp(os.path.getmtime(p))
+        files.append({"name": p.stem, "date": mtime.strftime("%Y-%m-%d %H:%M")})
+    return {"svos": files}
 
 
 @router.get("/presets/{name}", summary="Get editable parameters for a preset")
@@ -141,10 +146,9 @@ async def start_pipeline(body: PipelineStartRequest):
     if not svo_path.is_file():
         raise HTTPException(404, f"SVO2 not found: {body.svo_stem}.svo2")
 
-    output_dir = body.output_name.strip() or body.svo_stem
-    # Basic sanitization: no path separators or traversal
+    output_dir = body.output_name if body.output_name else body.svo_stem
     if any(c in output_dir for c in ("/", "\\", "..")):
-        raise HTTPException(400, "Invalid output_name")
+        raise HTTPException(400, "Invalid output folder name: path traversal detected.")
 
     cmd: list[str] = [
         sys.executable, "-u",
