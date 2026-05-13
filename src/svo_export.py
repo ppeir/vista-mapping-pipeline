@@ -280,7 +280,7 @@ if __name__ == "__main__":
                         help='Skip the first N seconds of the SVO (default: 0).')
     parser.add_argument('--trim-end', type=float, default=0.0,
                         help='Skip the last N seconds of the SVO (default: 0).')
-    parser.add_argument('--depth-scale', type=float, default=1.0,
+    parser.add_argument('--depth-scale', type=float, default=0.75,
                         help='Scale factor for depth image resolution (e.g. 0.5 → half size). Default: 1.0.')
     parser.add_argument('--depth-compression', type=int, default=5, choices=range(10),
                         metavar='[0-9]',

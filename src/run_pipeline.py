@@ -93,6 +93,9 @@ def run_parallel(jobs: list[tuple[list[str], str]]) -> None:
     for t in threads:
         t.join()
 
+    for proc in procs:
+        proc.wait()
+
     for i, (_, desc) in enumerate(jobs):
         rc = procs[i].returncode
         tag = "OK" if rc == 0 else f"FAILED exit={rc}"
@@ -134,7 +137,7 @@ _EXTRA_PARAM_MAP: dict[str, tuple[str, bool]] = {
 
 _PIPELINE_KEYS = {
     "svo", "output", "min_z", "max_z", "resolution", "side",
-    "depth", "depth_scale", "depth_compression", "skip_slam", "skip_video",
+    "depth_scale", "depth_compression", "skip_slam", "skip_video", "skip_depth",
 }
 
 
@@ -255,15 +258,21 @@ def main() -> None:
                         help="Pixel size (m) for manual projection.")
     parser.add_argument("--side", choices=["left", "right"], default="right",
                         help="Camera side for video export.")
+    parser.add_argument("--skip-camera-info", action="store_true", dest="skip_camera_info",
+                        help="Skip camera intrinsics step (zed_camera_info.py).")
     parser.add_argument("--skip-slam", action="store_true",
                         help="Skip SLAM step (rtabmap.db + cloud must already exist).")
     parser.add_argument("--skip-video", action="store_true",
                         help="Skip video export step (MP4 must already exist).")
-    parser.add_argument("--depth", action="store_true", default=True,
-                        help="Export depth PNG sequence alongside video (mode 5, single SVO pass). (default: enabled)")
-    parser.add_argument("--no-depth", action="store_false", dest="depth",
-                        help="Disable depth PNG export.")
-    parser.add_argument("--depth-scale", type=float, default=1.0, dest="depth_scale",
+    parser.add_argument("--skip-depth", action="store_true", dest="skip_depth",
+                        help="Skip depth images export (PNG sequence).")
+    parser.add_argument("--skip-poses", action="store_true", dest="skip_poses",
+                        help="Skip pose conversion step (convert_poses.py).")
+    parser.add_argument("--skip-projection", action="store_true", dest="skip_projection",
+                        help="Skip manual 2D projection step (project_ply.py).")
+    parser.add_argument("--skip-zip", action="store_true", dest="skip_zip",
+                        help="Skip ZIP assembly step.")
+    parser.add_argument("--depth-scale", type=float, default=0.75, dest="depth_scale",
                         help="Scale factor for depth images (e.g. 0.5 = half resolution).")
     parser.add_argument("--depth-compression", type=int, default=5, dest="depth_compression",
                         metavar="[0-9]",
@@ -294,28 +303,32 @@ def main() -> None:
         parser.error("--svo is required (pass it via CLI or --config)")
     if args.output is None:
         parser.error("--output is required (pass it via CLI or --config)")
-    if args.min_z is None:
-        parser.error("--min-z is required (pass it via CLI or --config)")
-    if args.max_z is None:
-        parser.error("--max-z is required (pass it via CLI or --config)")
+    if not args.skip_projection:
+        if args.min_z is None:
+            parser.error("--min-z is required (pass it via CLI or --config)")
+        if args.max_z is None:
+            parser.error("--max-z is required (pass it via CLI or --config)")
 
     svo_path = Path(args.svo).resolve()
     output_path = Path(args.output).resolve()
     output_name = output_path.name
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Steps 1+2: SLAM and video export in parallel (both read SVO, write to different files)
     mp4_path = output_path / f"{output_name}.mp4"
-    # Step 1/6: Camera intrinsics (fast, sequential, before parallel jobs)
-    run(
-        [
-            sys.executable, str(SRC_DIR / "zed_camera_info.py"),
-            "--svo", str(svo_path),
-            "--output-dir", str(output_path),
-            "--depth-scale", str(args.depth_scale),
-        ],
-        "Step 1/6 – Camera intrinsics  →  zed_camera_info.py",
-    )
+
+    # Step 1/6: Camera intrinsics
+    if not args.skip_camera_info:
+        run(
+            [
+                sys.executable, str(SRC_DIR / "zed_camera_info.py"),
+                "--svo", str(svo_path),
+                "--output-dir", str(output_path),
+                "--depth-scale", str(args.depth_scale),
+            ],
+            "Step 1/6 – Camera intrinsics  →  zed_camera_info.py",
+        )
+    else:
+        print("\n[SKIP] Camera intrinsics step.")
 
     # Steps 1+2: SLAM and video export in parallel (both read SVO, write to different files)
     parallel_jobs = []
@@ -328,96 +341,117 @@ def main() -> None:
     else:
         print("\n[SKIP] SLAM step.")
 
-    if not args.skip_video:
-        depth_dir = output_path / "depth" if args.depth else None
+    depth_dir = output_path / "depth"
+    if not args.skip_video or not args.skip_depth:
         svo_export_cmd = [
             sys.executable, str(SRC_DIR / "svo_export.py"),
             "--input_svo_file", str(svo_path),
-            "--output_file", str(mp4_path),
             "--side", args.side,
         ]
-        if args.depth and depth_dir is not None:
+        if not args.skip_video and not args.skip_depth:
+            # mode 5: video + depth images in a single SVO pass
             svo_export_cmd += [
                 "--mode", "5",
+                "--output_file", str(mp4_path),
                 "--output_path_dir", str(depth_dir),
                 "--depth-scale", str(args.depth_scale),
                 "--depth-compression", str(args.depth_compression),
             ]
+        elif not args.skip_video:
+            # mode 0: video only
+            svo_export_cmd += ["--mode", "0", "--output_file", str(mp4_path)]
+            depth_dir = None
         else:
-            svo_export_cmd += ["--mode", "0"]
+            # mode 4: depth images only
+            svo_export_cmd += [
+                "--mode", "4",
+                "--output_path_dir", str(depth_dir),
+                "--depth-scale", str(args.depth_scale),
+                "--depth-compression", str(args.depth_compression),
+            ]
         parallel_jobs.append((
             svo_export_cmd,
-            "Step 3/6 – Video export  →  svo_export.py",
+            "Step 3/6 – Video/Depth export  →  svo_export.py",
         ))
     else:
         depth_dir = None
-        print("\n[SKIP] Video export step.")
+        print("\n[SKIP] Video + Depth export step.")
 
     if parallel_jobs:
         run_parallel(parallel_jobs)
 
-    # Step 3: Convert poses
-    print(f"\n{'='*60}\n  Step 4/6 – Pose conversion  →  convert_poses.py\n{'='*60}")
+    # Step 4/6: Pose conversion
     localisation_json = output_path / "positions.json"
-    cp = load_convert_poses()
-    cp.INPUT_FILE = str(output_path / "rtabmap_poses.txt")
-    cp.OUTPUT_FILE = str(localisation_json)
-    cp.process_poses()
-    print(f"[OK] {localisation_json}")
-
-    # Step 4: Manual 2D projection
-    manual_pgm = output_path / "map_manual.pgm"
-    run(
-        [sys.executable, str(SRC_DIR / "project_ply.py"),
-         "--input", str(output_path / "rtabmap_cloud.ply"),
-         "--output", str(manual_pgm),
-         "--min_z", str(args.min_z),
-         "--max_z", str(args.max_z),
-         "--resolution", str(args.resolution)],
-        "Step 5/6 – Manual 2D projection  →  project_ply.py",
-    )
-
-    # Step 5: Map choice + ZIP
-    if args.map_choice is not None:
-        if args.map_choice == 1:
-            final_pgm = output_path / "map.pgm"
-            if not final_pgm.is_file():
-                print(f"[ERROR] map.pgm not found: {final_pgm}", file=sys.stderr)
-                sys.exit(1)
-            final_yaml = final_pgm.with_suffix(".yaml")
-        else:
-            if not manual_pgm.is_file():
-                print(f"[ERROR] map_manual.pgm not found: {manual_pgm}", file=sys.stderr)
-                sys.exit(1)
-            final_pgm = manual_pgm
-            final_yaml = manual_pgm.with_suffix(".yaml")
+    if not args.skip_poses:
+        print(f"\n{'='*60}\n  Step 4/6 – Pose conversion  →  convert_poses.py\n{'='*60}")
+        cp = load_convert_poses()
+        cp.INPUT_FILE = str(output_path / "rtabmap_poses.txt")
+        cp.OUTPUT_FILE = str(localisation_json)
+        cp.process_poses()
+        print(f"[OK] {localisation_json}")
     else:
-        final_pgm, final_yaml = ask_map_choice(output_path / "map.pgm", manual_pgm)
+        print("\n[SKIP] Pose conversion step.")
 
-    zip_path = output_path / f"{output_name}.zip"
-    print(f"\n{'='*60}\n  Step 6/6 – Creating ZIP\n{'='*60}")
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(localisation_json, "positions.json")
-        if mp4_path.is_file():
-            zf.write(mp4_path, f"{output_name}.mp4")
-        else:
-            print(f"[WARN] MP4 not found, skipped: {mp4_path}", file=sys.stderr)
-        for json_name in ("camera_info.json", "depth_camera_info.json"):
-            json_path = output_path / json_name
-            if json_path.is_file():
-                zf.write(json_path, json_name)
+    # Step 5/6: Manual 2D projection
+    manual_pgm = output_path / "map_manual.pgm"
+    if not args.skip_projection:
+        run(
+            [sys.executable, str(SRC_DIR / "project_ply.py"),
+             "--input", str(output_path / "rtabmap_cloud.ply"),
+             "--output", str(manual_pgm),
+             "--min_z", str(args.min_z),
+             "--max_z", str(args.max_z),
+             "--resolution", str(args.resolution)],
+            "Step 5/6 – Manual 2D projection  →  project_ply.py",
+        )
+    else:
+        print("\n[SKIP] 2D projection step.")
+
+    # Step 6/6: ZIP assembly
+    if not args.skip_zip:
+        if args.map_choice is not None:
+            if args.map_choice == 1:
+                final_pgm = output_path / "map.pgm"
+                if not final_pgm.is_file():
+                    print(f"[ERROR] map.pgm not found: {final_pgm}", file=sys.stderr)
+                    sys.exit(1)
+                final_yaml = final_pgm.with_suffix(".yaml")
             else:
-                print(f"[WARN] {json_name} not found, skipped.", file=sys.stderr)
-        if depth_dir is not None and depth_dir.is_dir():
-            depth_files = sorted(depth_dir.iterdir())
-            for f in depth_files:
-                zf.write(f, f"depth/{f.name}")
-            print(f"  depth/  ({len(depth_files)} files)")
-        zf.write(final_pgm, "map.pgm")
-        zf.write(final_yaml, "map.yaml")
+                if not manual_pgm.is_file():
+                    print(f"[ERROR] map_manual.pgm not found: {manual_pgm}", file=sys.stderr)
+                    sys.exit(1)
+                final_pgm = manual_pgm
+                final_yaml = manual_pgm.with_suffix(".yaml")
+        else:
+            final_pgm, final_yaml = ask_map_choice(output_path / "map.pgm", manual_pgm)
 
-    print(f"\n[DONE] {zip_path}")
-    print(f"       positions.json | {output_name}.mp4 | map.pgm | map.yaml | camera_info.json | depth_camera_info.json | depth/*.png")
+        zip_path = output_path / f"{output_name}.zip"
+        print(f"\n{'='*60}\n  Step 6/6 – Creating ZIP\n{'='*60}")
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(localisation_json, "positions.json")
+            if mp4_path.is_file():
+                zf.write(mp4_path, f"{output_name}.mp4")
+            else:
+                print(f"[WARN] MP4 not found, skipped: {mp4_path}", file=sys.stderr)
+            for json_name in ("camera_info.json", "depth_camera_info.json"):
+                json_path = output_path / json_name
+                if json_path.is_file():
+                    zf.write(json_path, json_name)
+                else:
+                    print(f"[WARN] {json_name} not found, skipped.", file=sys.stderr)
+            if depth_dir is not None and depth_dir.is_dir():
+                depth_files = sorted(depth_dir.iterdir())
+                for f in depth_files:
+                    zf.write(f, f"depth/{f.name}")
+                print(f"  depth/  ({len(depth_files)} files)")
+            zf.write(final_pgm, "map.pgm")
+            zf.write(final_yaml, "map.yaml")
+        print(f"\n[DONE] {zip_path}")
+        print(f"       positions.json | {output_name}.mp4 | map.pgm | map.yaml | camera_info.json | depth_camera_info.json | depth/*.png")
+    else:
+        print("\n[SKIP] ZIP assembly step.")
+
+    print("\n[DONE] Pipeline complete.")
 
 
 if __name__ == "__main__":

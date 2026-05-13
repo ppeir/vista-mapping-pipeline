@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import toast, { Toaster } from 'react-hot-toast'
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -8,6 +9,7 @@ type PipelineStatus = 'idle' | 'running' | 'done' | 'error'
 interface PipelinePayload {
   config: string
   svo_stem: string
+  output_name: string
   map_choice: 1 | 2
   extra_args: string[]
 }
@@ -114,6 +116,116 @@ function Select({
   )
 }
 
+// ── Pipeline step groups ──────────────────────────────────────────────────
+
+const GLOBAL_PARAM_KEYS = new Set(['trim_start', 'trim_end', 'depth_scale'])
+
+interface StepGroup {
+  id: string
+  label: string
+  keys: Set<string>
+  includeRtabmap?: boolean
+  skipFlag?: string | null
+}
+
+const EASTER_EGG_MESSAGES = [
+  '🚀 Pipeline successfully completed in 0.0001 ms! New personal best. (Tip: try checking at least one box next time).',
+  'Request to process the void received. The robot thought long and hard about nothing, and absolutely loved it.',
+  'No steps selected. I used this free time to meditate on the meaning of life and sort my bits.',
+  'Error 404: Intention to work not found. Please check at least one box to wake up the processor.',
+  'Executing DoNothing() algorithm... Absolute success.',
+]
+
+const STEP_GROUPS: StepGroup[] = [
+  {
+    id: 'camera',
+    label: 'Step 1 – Camera intrinsics (zed_camera_info.py)',
+    keys: new Set<string>(),
+    skipFlag: '--skip-camera-info',
+  },
+  {
+    id: 'slam',
+    label: 'Step 2 – SLAM (process_svo.py)',
+    keys: new Set(['render', 'superpoint', 'quality', 'regen_grid']),
+    includeRtabmap: true,
+    skipFlag: '--skip-slam',
+  },
+  {
+    id: 'video',
+    label: 'Step 3 – SVO export (svo_export.py)',
+    keys: new Set(['side', 'depth_compression']),
+    skipFlag: null,
+  },
+  {
+    id: 'poses',
+    label: 'Step 4 – Pose conversion (convert_poses.py)',
+    keys: new Set<string>(),
+    skipFlag: '--skip-poses',
+  },
+  {
+    id: 'projection',
+    label: 'Step 5 – 2D projection (project_ply.py)',
+    keys: new Set(['min_z', 'max_z', 'resolution']),
+    skipFlag: '--skip-projection',
+  },
+  {
+    id: 'zip',
+    label: 'Step 6 – ZIP assembly',
+    keys: new Set<string>(),
+    skipFlag: '--skip-zip',
+  },
+]
+
+function ParamField({
+  p,
+  value,
+  onChange,
+  disabled,
+}: {
+  p: ParamDef
+  value: string
+  onChange: (v: string) => void
+  disabled: boolean
+}) {
+  if (p.type === 'bool') {
+    return (
+      <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          id={`param-${p.key}`}
+          checked={value === 'true'}
+          onChange={e => onChange(e.target.checked ? 'true' : 'false')}
+          disabled={disabled}
+          className="h-4 w-4 rounded border-gray-600 bg-gray-800 accent-blue-500 disabled:opacity-40"
+        />
+        <label htmlFor={`param-${p.key}`} className="text-xs text-gray-300">{p.label}</label>
+      </div>
+    )
+  }
+  if (p.type.startsWith('choice:')) {
+    const choices = p.type.slice(7).split(',')
+    return (
+      <Select
+        label={p.label}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        options={choices.map(c => ({ value: c, label: c }))}
+      />
+    )
+  }
+  return (
+    <Input
+      label={p.label}
+      value={value}
+      onChange={onChange}
+      disabled={disabled}
+      type={p.type === 'float' || p.type === 'int' ? 'number' : 'text'}
+      placeholder={p.value}
+    />
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────
 
 export default function App() {
@@ -137,10 +249,19 @@ export default function App() {
   const [svos, setSvos] = useState<string[]>([])
   const [selectedConfig, setSelectedConfig] = useState('')
   const [selectedSvo, setSelectedSvo] = useState('')
+  const [outputName, setOutputName] = useState('')
   const [mapChoice, setMapChoice] = useState<'1' | '2'>('1')
   const [presetParams, setPresetParams] = useState<ParamDef[]>([])
   const [paramValues, setParamValues] = useState<Record<string, string>>({})
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [stepEnabled, setStepEnabled] = useState<Record<string, boolean>>({
+    camera: true, slam: true, video: true, poses: true, projection: true, zip: true,
+  })
+  const [openSteps, setOpenSteps] = useState<Record<string, boolean>>({
+    camera: false, slam: false, video: false, poses: false, projection: false, zip: false,
+  })
+  const [exportVideo, setExportVideo] = useState(true)
+  const [exportDepth, setExportDepth] = useState(true)
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus>('idle')
   const [logs, setLogs] = useState<string[]>([])
   const [zipReady, setZipReady] = useState(false)
@@ -205,7 +326,7 @@ export default function App() {
     const sse = new EventSource(recordSseUrl)
     sse.onmessage = (e: MessageEvent<string>) => {
       const data = e.data
-      if (data.startsWith('[DONE]')) {
+      if (data.startsWith('[DONE] exit=')) {
         const m = data.match(/exit=(-?\d+)/)
         const ok = m && m[1] === '0'
         setRecordStatus(ok ? 'done' : 'error')
@@ -241,7 +362,7 @@ export default function App() {
     const sse = new EventSource(pipelineSseUrl)
     sse.onmessage = (e: MessageEvent<string>) => {
       const data = e.data
-      if (data.startsWith('[DONE]')) {
+      if (data.startsWith('[DONE] exit=')) {
         const m = data.match(/exit=(-?\d+)/)
         const ok = m && m[1] === '0'
         setPipelineStatus(ok ? 'done' : 'error')
@@ -296,21 +417,41 @@ export default function App() {
   }
 
   const handleStartPipeline = async () => {
-    if (!selectedConfig) { alert('Sélectionner un preset'); return }
-    if (!selectedSvo) { alert('Sélectionner un fichier SVO2'); return }
+    if (!selectedConfig) { alert('Select a preset'); return }
+    if (!selectedSvo) { alert('Select an SVO2 file'); return }
+    if (STEP_GROUPS.every(g => !stepEnabled[g.id])) {
+      toast(EASTER_EGG_MESSAGES[Math.floor(Math.random() * EASTER_EGG_MESSAGES.length)], {
+        icon: '🤔',
+        duration: 6000,
+        style: { maxWidth: '480px' },
+      })
+      return
+    }
     setLogs([])
     setZipReady(false)
     try {
       const extra_args: string[] = []
+      // Step enable/disable flags
+      for (const group of STEP_GROUPS) {
+        if (!group.skipFlag) continue
+        if (!stepEnabled[group.id]) {
+          extra_args.push(group.skipFlag)
+        }
+      }
+      // Video step: two independent sub-flags
+      if (!stepEnabled['video']) {
+        extra_args.push('--skip-video', '--skip-depth')
+      } else {
+        if (!exportVideo) extra_args.push('--skip-video')
+        if (!exportDepth) extra_args.push('--skip-depth')
+      }
+      // Param values (run_pipeline.py / process_svo.py handle unused params gracefully)
       for (const p of presetParams) {
         const val = paramValues[p.key] ?? p.value
         if (p.type === 'bool') {
-          if (p.key === 'depth') {
-            extra_args.push(val === 'true' ? '--depth' : '--no-depth')
-          } else if (val === 'true') {
+          if (val === 'true') {
             extra_args.push(p.cli)
           }
-          // false flags are simply omitted
         } else {
           extra_args.push(p.cli, val)
         }
@@ -318,6 +459,7 @@ export default function App() {
       const payload: PipelinePayload = {
         config: selectedConfig,
         svo_stem: selectedSvo,
+        output_name: outputName.trim() || selectedSvo,
         map_choice: mapChoice === '1' ? 1 : 2,
         extra_args,
       }
@@ -332,11 +474,12 @@ export default function App() {
   // ── Derived ────────────────────────────────────────────────────
   const isRecording = recordStatus === 'recording'
   const isPipelineRunning = pipelineStatus === 'running'
-  const zipSession = selectedSvo
+  const zipSession = outputName.trim() || selectedSvo
 
   // ── Render ─────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
+      <Toaster position="bottom-center" toastOptions={{ style: { background: '#1f2937', color: '#f3f4f6', border: '1px solid #374151' } }} />
       {/* Header */}
       <header className="bg-gray-900 border-b border-gray-800 px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-baseline gap-3">
@@ -382,7 +525,7 @@ export default function App() {
             ]}
           />
 
-          {/* Paramètres avancés capture */}
+          {/* Advanced settings – capture */}
           <div>
             <button
               onClick={() => setShowCaptureAdvanced(v => !v)}
@@ -390,12 +533,12 @@ export default function App() {
               className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-200 transition-colors disabled:opacity-40"
             >
               <span>{showCaptureAdvanced ? '▾' : '▸'}</span>
-              <span>Paramètres avancés</span>
+              <span>Advanced settings</span>
             </button>
             {showCaptureAdvanced && (
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <Input
-                  label="Warmup IMU (s)"
+                  label="imu_warmup (warmup, s)"
                   value={imuWarmup}
                   onChange={setImuWarmup}
                   disabled={isRecording}
@@ -403,7 +546,7 @@ export default function App() {
                   placeholder="2.0"
                 />
                 <Input
-                  label="Délai démarrage (s)"
+                  label="wait (start delay, s)"
                   value={captureWait}
                   onChange={setCaptureWait}
                   disabled={isRecording}
@@ -421,7 +564,7 @@ export default function App() {
                 {frameCount > 0 ? fmtTime(elapsed) : '––:––'}
               </div>
               <div className="text-sm text-gray-400">
-                {frameCount > 0 ? `${frameCount.toLocaleString()} frames` : 'Initialisation…'}
+                {frameCount > 0 ? `${frameCount.toLocaleString()} frames` : 'Initializing…'}
               </div>
             </div>
           )}
@@ -483,19 +626,28 @@ export default function App() {
 
           {/* SVO2 file dropdown */}
           <div className="space-y-1">
-            <label className="block text-xs text-gray-400">Fichier SVO2</label>
+            <label className="block text-xs text-gray-400">SVO2 file</label>
             <select
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm
                          focus:outline-none focus:border-blue-500 disabled:opacity-40"
               value={selectedSvo}
               onFocus={fetchSvos}
-              onChange={e => setSelectedSvo(e.target.value)}
+              onChange={e => { setSelectedSvo(e.target.value); setOutputName(e.target.value) }}
               disabled={isPipelineRunning}
             >
               <option value="">— select —</option>
               {svos.map(s => <option key={s} value={s}>{s}.svo2</option>)}
             </select>
           </div>
+
+          {/* Output folder name */}
+          <Input
+            label="Output folder (data/outputs/…)"
+            value={outputName}
+            onChange={setOutputName}
+            placeholder={selectedSvo || 'output name'}
+            disabled={isPipelineRunning}
+          />
 
           {/* Preset dropdown */}
           <div className="space-y-1">
@@ -512,77 +664,164 @@ export default function App() {
             </select>
           </div>
 
-          {/* Map choice (always visible) */}
-          <Select
-            label="Map choice"
-            value={mapChoice}
-            onChange={v => setMapChoice(v as '1' | '2')}
-            disabled={isPipelineRunning}
-            options={[
-              { value: '1', label: 'RTAB-Map projection' },
-              { value: '2', label: 'Manual projection' },
-            ]}
-          />
+          {/* Advanced parameters — step accordions */}
+          <div>
+            <button
+              onClick={() => setShowAdvanced(v => !v)}
+              disabled={isPipelineRunning}
+              className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-200 transition-colors disabled:opacity-40"
+            >
+              <span>{showAdvanced ? '▾' : '▸'}</span>
+              <span>Advanced parameters</span>
+            </button>
 
-          {/* Paramètres avancés — dynamic, collapsible */}
-          {presetParams.length > 0 && (
-            <div>
-              <button
-                onClick={() => setShowAdvanced(v => !v)}
-                disabled={isPipelineRunning}
-                className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-200 transition-colors disabled:opacity-40"
-              >
-                <span>{showAdvanced ? '▾' : '▸'}</span>
-                <span>Paramètres avancés</span>
-              </button>
-              {showAdvanced && (
-                <div className="mt-3 grid grid-cols-2 gap-3">
-                  {presetParams.map(p => {
-                    const cur = paramValues[p.key] ?? p.value
-                    if (p.type === 'bool') {
-                      return (
-                        <div key={p.key} className="flex items-center gap-2 col-span-1">
-                          <input
-                            type="checkbox"
-                            id={`param-${p.key}`}
-                            checked={cur === 'true'}
-                            onChange={e => setParamValues(prev => ({ ...prev, [p.key]: e.target.checked ? 'true' : 'false' }))}
-                            disabled={isPipelineRunning}
-                            className="h-4 w-4 rounded border-gray-600 bg-gray-800 accent-blue-500 disabled:opacity-40"
-                          />
-                          <label htmlFor={`param-${p.key}`} className="text-xs text-gray-300">{p.label}</label>
-                        </div>
-                      )
-                    }
-                    if (p.type.startsWith('choice:')) {
-                      const choices = p.type.slice(7).split(',')
-                      return (
-                        <Select
+            {showAdvanced && (
+              <div className="mt-3 space-y-3">
+
+                {/* Global params (apply to multiple steps) */}
+                {(() => {
+                  const globals = presetParams.filter(p => GLOBAL_PARAM_KEYS.has(p.key))
+                  if (globals.length === 0) return null
+                  return (
+                    <div className="grid grid-cols-2 gap-3 pb-1">
+                      {globals.map(p => (
+                        <ParamField
                           key={p.key}
-                          label={p.label}
-                          value={cur}
+                          p={p}
+                          value={paramValues[p.key] ?? p.value}
                           onChange={v => setParamValues(prev => ({ ...prev, [p.key]: v }))}
                           disabled={isPipelineRunning}
-                          options={choices.map(c => ({ value: c, label: c }))}
                         />
-                      )
-                    }
-                    return (
-                      <Input
-                        key={p.key}
-                        label={p.label}
-                        value={cur}
-                        onChange={v => setParamValues(prev => ({ ...prev, [p.key]: v }))}
-                        disabled={isPipelineRunning}
-                        type={p.type === 'float' || p.type === 'int' ? 'number' : 'text'}
-                        placeholder={p.value}
-                      />
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          )}
+                      ))}
+                    </div>
+                  )
+                })()}
+
+                {/* Per-step accordions — all 6, always rendered */}
+                {STEP_GROUPS.map(group => {
+                  const groupParams = presetParams.filter(p =>
+                    group.keys.has(p.key) ||
+                    (group.includeRtabmap === true && p.key.startsWith('rtabmap.'))
+                  )
+                  const hasContent = groupParams.length > 0 || group.id === 'zip' || group.id === 'video'
+                  const isEnabled = stepEnabled[group.id] ?? true
+                  const isOpen = openSteps[group.id] ?? false
+                  return (
+                    <div key={group.id} className="border border-gray-700 rounded-xl overflow-hidden">
+                      {/* Header: checkbox + label + expand arrow */}
+                      <div className="flex items-center gap-2 px-3 py-2.5 bg-gray-800/70">
+                        <input
+                          type="checkbox"
+                          checked={isEnabled}
+                          onChange={e => setStepEnabled(prev => ({ ...prev, [group.id]: e.target.checked }))}
+                          disabled={isPipelineRunning}
+                          className="h-4 w-4 flex-shrink-0 rounded border-gray-600 accent-blue-500 disabled:opacity-40"
+                        />
+                        <button
+                          onClick={() => hasContent && setOpenSteps(prev => ({ ...prev, [group.id]: !prev[group.id] }))}
+                          disabled={isPipelineRunning || !hasContent}
+                          className="flex-1 flex items-center justify-between text-left gap-2 disabled:cursor-default"
+                        >
+                          <span className={`text-xs font-medium ${
+                            isEnabled ? 'text-gray-200' : 'line-through text-gray-500'
+                          }`}>
+                            {group.label}
+                          </span>
+                          {hasContent && (
+                            <span className="text-gray-500 text-xs flex-shrink-0">{isOpen ? '▾' : '▸'}</span>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Params body */}
+                      {isOpen && hasContent && (
+                        <div className="p-3 space-y-3 border-t border-gray-700">
+                          {group.id === 'zip' && (
+                            <Select
+                              label="map_choice (map source for ZIP)"
+                              value={mapChoice}
+                              onChange={v => setMapChoice(v as '1' | '2')}
+                              disabled={isPipelineRunning || !isEnabled}
+                              options={[
+                                { value: '1', label: 'RTAB-Map built-in (map.pgm)' },
+                                { value: '2', label: 'Manual projection (map_manual.pgm)' },
+                              ]}
+                            />
+                          )}
+                          {group.id === 'video' ? (() => {
+                            const sideParam = groupParams.find(p => p.key === 'side')
+                            const comprParam = groupParams.find(p => p.key === 'depth_compression')
+                            const dis = isPipelineRunning || !isEnabled
+                            return (
+                              <div className="grid grid-cols-2 gap-3">
+                                {/* Col 1: side dropdown + Export MP4 checkbox */}
+                                <div className="space-y-1">
+                                  {sideParam && (
+                                    <ParamField
+                                      p={sideParam}
+                                      value={paramValues[sideParam.key] ?? sideParam.value}
+                                      onChange={v => setParamValues(prev => ({ ...prev, [sideParam.key]: v }))}
+                                      disabled={dis || !exportVideo}
+                                    />
+                                  )}
+                                  <div className="flex items-center gap-2 pt-1">
+                                    <input
+                                      type="checkbox"
+                                      id="export-video-check"
+                                      checked={exportVideo}
+                                      onChange={e => setExportVideo(e.target.checked)}
+                                      disabled={dis}
+                                      className="h-4 w-4 rounded border-gray-600 bg-gray-800 accent-blue-500 disabled:opacity-40"
+                                    />
+                                    <label htmlFor="export-video-check" className="text-xs text-gray-300">Export MP4</label>
+                                  </div>
+                                </div>
+                                {/* Col 2: depth compression + Export depth checkbox */}
+                                <div className="space-y-1">
+                                  {comprParam && (
+                                    <ParamField
+                                      p={comprParam}
+                                      value={paramValues[comprParam.key] ?? comprParam.value}
+                                      onChange={v => setParamValues(prev => ({ ...prev, [comprParam.key]: v }))}
+                                      disabled={dis || !exportDepth}
+                                    />
+                                  )}
+                                  <div className="flex items-center gap-2 pt-1">
+                                    <input
+                                      type="checkbox"
+                                      id="export-depth-check"
+                                      checked={exportDepth}
+                                      onChange={e => setExportDepth(e.target.checked)}
+                                      disabled={dis}
+                                      className="h-4 w-4 rounded border-gray-600 bg-gray-800 accent-blue-500 disabled:opacity-40"
+                                    />
+                                    <label htmlFor="export-depth-check" className="text-xs text-gray-300">Export depth</label>
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })() : groupParams.length > 0 && (
+                            <div className="grid grid-cols-2 gap-3">
+                              {groupParams.map(p => (
+                                <ParamField
+                                  key={p.key}
+                                  p={p}
+                                  value={paramValues[p.key] ?? p.value}
+                                  onChange={v => setParamValues(prev => ({ ...prev, [p.key]: v }))}
+                                  disabled={isPipelineRunning || !isEnabled}
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+
+              </div>
+            )}
+          </div>
 
           {/* Launch / Kill buttons */}
           <div className="flex gap-2">

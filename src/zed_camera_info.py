@@ -82,7 +82,7 @@ if __name__ == "__main__":
     parser.add_argument("--svo", required=True, help="Path to the .svo/.svo2 file.")
     parser.add_argument("--output-dir", default=".", dest="output_dir",
                         help="Directory where camera_info.json and depth_camera_info.json are written.")
-    parser.add_argument("--depth-scale", type=float, default=1.0, dest="depth_scale",
+    parser.add_argument("--depth-scale", type=float, default=0.75, dest="depth_scale",
                         help="Scale factor applied to depth intrinsics (default: 1.0).")
     opt = parser.parse_args()
     import os

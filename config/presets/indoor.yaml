@@ -6,8 +6,7 @@ side: right
 resolution: 0.05
 min_z: 0.0
 max_z: 2.0
-depth: true
-depth_scale: 1.0
+depth_scale: 0.75
 depth_compression: 5
 
 # --- process_svo.py args ---

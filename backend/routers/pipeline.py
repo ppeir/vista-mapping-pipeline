@@ -32,6 +32,10 @@ router = APIRouter()
 class PipelineStartRequest(BaseModel):
     config: str = Field(..., description="Preset name (stem), e.g. outdoor")
     svo_stem: str = Field(..., description="SVO2 file stem (without extension), e.g. outdoor_10")
+    output_name: str = Field(
+        default="",
+        description="Output folder name (defaults to svo_stem if empty)",
+    )
     map_choice: int = Field(
         default=1, ge=1, le=2,
         description="Map to include in ZIP: 1=RTAB-Map built-in, 2=manual projection",
@@ -76,19 +80,18 @@ async def get_preset_params(name: str):
     # Ordered param definitions: (yaml_key, cli_arg, type, label)
     # type is one of: float | int | str | bool | choice:a,b,c
     KNOWN = [
-        ("min_z",             "--min-z",             "float",                   "min-z (m)"),
-        ("max_z",             "--max-z",             "float",                   "max-z (m)"),
-        ("resolution",        "--resolution",        "float",                   "Résolution (m/px)"),
-        ("side",              "--side",              "choice:left,right",       "Caméra"),
-        ("depth",             "--depth",             "bool",                    "Export profondeur"),
-        ("depth_scale",       "--depth-scale",       "float",                   "Échelle profondeur"),
-        ("depth_compression", "--depth-compression", "int",                     "Compression PNG (0-9)"),
-        ("render",            "--render",            "choice:cloud,mesh,texture","Rendu 3D"),
-        ("superpoint",        "--superpoint",        "bool",                    "SuperPoint features"),
-        ("quality",           "--quality",           "int",                     "Qualité SLAM"),
-        ("trim_start",        "--trim-start",        "float",                   "Trim début (s)"),
-        ("trim_end",          "--trim-end",          "float",                   "Trim fin (s)"),
-        ("regen_grid",        "--regen-grid",        "bool",                    "Régénérer la grille"),
+        ("min_z",             "--min-z",             "float",                   "min_z (min height, m)"),
+        ("max_z",             "--max-z",             "float",                   "max_z (max height, m)"),
+        ("resolution",        "--resolution",        "float",                   "resolution (cell size, m/px)"),
+        ("side",              "--side",              "choice:left,right",       "side (camera side)"),
+        ("depth_scale",       "--depth-scale",       "float",                   "depth_scale (scale factor for depth images)"),
+        ("depth_compression", "--depth-compression", "int",                     "depth_compression (PNG level 0-9)"),
+        ("render",            "--render",            "choice:cloud,mesh,texture","render (3D export mode)"),
+        ("superpoint",        "--superpoint",        "bool",                    "superpoint (SuperPoint features)"),
+        ("quality",           "--quality",           "int",                     "quality (ZED depth quality 0-6)"),
+        ("trim_start",        "--trim-start",        "float",                   "trim_start (skip start, s)"),
+        ("trim_end",          "--trim-end",          "float",                   "trim_end (skip end, s)"),
+        ("regen_grid",        "--regen-grid",        "bool",                    "regen_grid (rebuild grid only)"),
     ]
 
     params = []
@@ -138,12 +141,17 @@ async def start_pipeline(body: PipelineStartRequest):
     if not svo_path.is_file():
         raise HTTPException(404, f"SVO2 not found: {body.svo_stem}.svo2")
 
+    output_dir = body.output_name.strip() or body.svo_stem
+    # Basic sanitization: no path separators or traversal
+    if any(c in output_dir for c in ("/", "\\", "..")):
+        raise HTTPException(400, "Invalid output_name")
+
     cmd: list[str] = [
         sys.executable, "-u",
         str(REPO_ROOT / "src" / "run_pipeline.py"),
         "--config", str(config_path),
         "--svo", str(svo_path),
-        "--output", str(REPO_ROOT / "data" / "outputs" / body.svo_stem),
+        "--output", str(REPO_ROOT / "data" / "outputs" / output_dir),
         "--map-choice", str(body.map_choice),
     ]
 
@@ -152,8 +160,8 @@ async def start_pipeline(body: PipelineStartRequest):
 
     loop = asyncio.get_running_loop()
     process_manager.start("pipeline", cmd, str(REPO_ROOT), loop)
-    logger.info("Pipeline started: preset=%s svo=%s", body.config, body.svo_stem)
-    return {"status": "started", "svo": body.svo_stem}
+    logger.info("Pipeline started: preset=%s svo=%s output=%s", body.config, body.svo_stem, output_dir)
+    return {"status": "started", "svo": body.svo_stem, "output": output_dir}
 
 
 @router.post("/pipeline/stop", summary="Kill the running pipeline")
