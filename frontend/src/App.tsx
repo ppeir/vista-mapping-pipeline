@@ -120,12 +120,17 @@ export default function App() {
   // ── Capture state ──────────────────────────────────────────────
   const [sessionName, setSessionName] = useState('')
   const [fps, setFps] = useState('15')
+  const [imuWarmup, setImuWarmup] = useState('2.0')
+  const [captureWait, setCaptureWait] = useState('0')
+  const [showCaptureAdvanced, setShowCaptureAdvanced] = useState(false)
   const [recordStatus, setRecordStatus] = useState<RecordStatus>('idle')
   const [frameCount, setFrameCount] = useState(0)
   const [elapsed, setElapsed] = useState(0)
+  const [recordLogs, setRecordLogs] = useState<string[]>([])
   const [recordSseUrl, setRecordSseUrl] = useState<string | null>(null)
   const startTimeRef = useRef<number>(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const recordLogEndRef = useRef<HTMLDivElement>(null)
 
   // ── Pipeline state ─────────────────────────────────────────────
   const [configs, setConfigs] = useState<string[]>([])
@@ -187,6 +192,10 @@ export default function App() {
 
   // ── Auto-scroll logs ───────────────────────────────────────────
   useEffect(() => {
+    recordLogEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [recordLogs])
+
+  useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [logs])
 
@@ -198,7 +207,9 @@ export default function App() {
       const data = e.data
       if (data.startsWith('[DONE]')) {
         const m = data.match(/exit=(-?\d+)/)
-        setRecordStatus(m && m[1] === '0' ? 'done' : 'error')
+        const ok = m && m[1] === '0'
+        setRecordStatus(ok ? 'done' : 'error')
+        setRecordLogs(prev => [...prev, ok ? '[OK] Recording done.' : `[ERROR] Exit code ${m?.[1]}.`])
         setRecordSseUrl(null)
         if (timerRef.current) clearInterval(timerRef.current)
         sse.close()
@@ -215,6 +226,8 @@ export default function App() {
               1000,
             )
           }
+        } else if (data && !data.startsWith(':')) {
+          setRecordLogs(prev => [...prev, data])
         }
       }
     }
@@ -251,11 +264,13 @@ export default function App() {
       await apiPost('/api/record/start', {
         session_name: sessionName.trim(),
         fps: parseInt(fps),
-        imu_warmup: 2.0,
+        imu_warmup: isNaN(parseFloat(imuWarmup)) ? 2.0 : parseFloat(imuWarmup),
+        wait: isNaN(parseInt(captureWait)) ? 0 : parseInt(captureWait),
       })
       setRecordStatus('recording')
       setFrameCount(0)
       setElapsed(0)
+      setRecordLogs([])
       timerRef.current = null
       setRecordSseUrl(`/api/logs/record?t=${Date.now()}`)
     } catch (err) {
@@ -359,6 +374,38 @@ export default function App() {
             ]}
           />
 
+          {/* Paramètres avancés capture */}
+          <div>
+            <button
+              onClick={() => setShowCaptureAdvanced(v => !v)}
+              disabled={isRecording}
+              className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-200 transition-colors disabled:opacity-40"
+            >
+              <span>{showCaptureAdvanced ? '▾' : '▸'}</span>
+              <span>Paramètres avancés</span>
+            </button>
+            {showCaptureAdvanced && (
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <Input
+                  label="Warmup IMU (s)"
+                  value={imuWarmup}
+                  onChange={setImuWarmup}
+                  disabled={isRecording}
+                  type="number"
+                  placeholder="2.0"
+                />
+                <Input
+                  label="Délai démarrage (s)"
+                  value={captureWait}
+                  onChange={setCaptureWait}
+                  disabled={isRecording}
+                  type="number"
+                  placeholder="0"
+                />
+              </div>
+            )}
+          </div>
+
           {/* Live stats while recording */}
           {isRecording && (
             <div className="bg-gray-800 rounded-xl px-5 py-4 space-y-1">
@@ -387,6 +434,28 @@ export default function App() {
             >
               Stop Recording
             </button>
+          )}
+
+          {/* Record log console */}
+          {recordLogs.length > 0 && (
+            <div className="log-console bg-gray-950 border border-gray-800 rounded-xl p-3 h-40
+                            overflow-y-auto font-mono text-xs leading-relaxed">
+              {recordLogs.map((line, i) => (
+                <div
+                  key={i}
+                  className={
+                    /\[ERROR\]|error|Error/i.test(line)
+                      ? 'text-red-400'
+                      : /\[OK\]/i.test(line)
+                      ? 'text-green-400'
+                      : 'text-gray-300'
+                  }
+                >
+                  {line}
+                </div>
+              ))}
+              <div ref={recordLogEndRef} />
+            </div>
           )}
         </section>
 

@@ -4,6 +4,7 @@ process_manager.py – Manages long-running subprocesses for the FastAPI backend
 Each process is identified by a string key (e.g. "record", "pipeline").
 Stdout/stderr of each process is read in a dedicated daemon thread and forwarded
 to an asyncio.Queue, which SSE endpoints can drain asynchronously.
+Every line is also written to a timestamped log file under data/logs/.
 
 Carriage-return (\\r) lines (progress bars) are throttled to ≤ 2/sec so the SSE
 stream is not flooded. ANSI escape codes are stripped before forwarding.
@@ -18,12 +19,26 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mKHJABCDEFsu]")
+
+# Log files go here (relative to repo root, resolved at start() time)
+_LOGS_DIR: Optional[Path] = None
+
+
+def _logs_dir() -> Path:
+    global _LOGS_DIR
+    if _LOGS_DIR is None:
+        # backend/utils/process_manager.py → ../../data/logs
+        _LOGS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "logs"
+    _LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    return _LOGS_DIR
 
 
 class ProcessState(str, Enum):
@@ -37,6 +52,7 @@ class ProcessState(str, Enum):
 class ManagedProcess:
     proc: subprocess.Popen
     log_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
+    log_path: Optional[Path] = field(default=None)
     state: ProcessState = ProcessState.RUNNING
     _loop: Optional[asyncio.AbstractEventLoop] = field(default=None, repr=False)
     _thread: Optional[threading.Thread] = field(default=None, repr=False)
@@ -56,6 +72,7 @@ class ManagedProcess:
         """Reader thread: drain stdout, handle \\r progress bars, forward clean lines."""
         buf = bytearray()
         last_r_emit = 0.0
+        log_file = open(self.log_path, "w", encoding="utf-8") if self.log_path else None
         try:
             while True:
                 char: bytes = self.proc.stdout.read(1)  # type: ignore[union-attr]
@@ -64,6 +81,9 @@ class ManagedProcess:
                 if char == b"\n":
                     line = self._clean(buf)
                     if line:
+                        if log_file:
+                            log_file.write(line + "\n")
+                            log_file.flush()
                         self._put(line)
                     buf.clear()
                 elif char == b"\r":
@@ -72,6 +92,9 @@ class ManagedProcess:
                     if now - last_r_emit >= 0.5:
                         line = self._clean(buf)
                         if line:
+                            if log_file:
+                                log_file.write(line + "\n")
+                                log_file.flush()
                             self._put(line)
                         last_r_emit = now
                     buf.clear()
@@ -84,9 +107,16 @@ class ManagedProcess:
             if buf:
                 line = self._clean(buf)
                 if line:
+                    if log_file:
+                        log_file.write(line + "\n")
+                        log_file.flush()
                     self._put(line)
             rc = self.proc.wait()
             self.state = ProcessState.DONE if rc == 0 else ProcessState.ERROR
+            exit_msg = f"--- exit code {rc} ---"
+            if log_file:
+                log_file.write(exit_msg + "\n")
+                log_file.close()
             logger.info("Process [pid=%s] exited with code %d", self.proc.pid, rc)
             self._put(f"__EXIT__{rc}")
 
@@ -125,7 +155,14 @@ class ProcessManager:
         if self.is_running(key):
             raise RuntimeError(f"Process '{key}' is already running")
 
-        logger.info("Starting [%s]: %s", key, " ".join(cmd))
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path = _logs_dir() / f"{key}_{ts}.log"
+
+        # Write command header to log file immediately
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(f"# {ts}  cmd: {' '.join(cmd)}\n")
+
+        logger.info("Starting [%s]: %s  →  %s", key, " ".join(cmd), log_path)
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -134,7 +171,7 @@ class ProcessManager:
             bufsize=0,            # unbuffered – important for real-time output
             cwd=cwd,
         )
-        mp = ManagedProcess(proc=proc, log_queue=asyncio.Queue())
+        mp = ManagedProcess(proc=proc, log_queue=asyncio.Queue(), log_path=log_path)
         mp.start_reader(loop)
         self._procs[key] = mp
         return mp
