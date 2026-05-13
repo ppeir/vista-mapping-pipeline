@@ -287,6 +287,14 @@ export default function App() {
     }
   }
 
+  const handleKillPipeline = async () => {
+    try {
+      await apiPost('/api/pipeline/stop')
+    } catch (err) {
+      alert(`Failed to kill pipeline: ${err instanceof Error ? err.message : err}`)
+    }
+  }
+
   const handleStartPipeline = async () => {
     if (!selectedConfig) { alert('Sélectionner un preset'); return }
     if (!selectedSvo) { alert('Sélectionner un fichier SVO2'); return }
@@ -576,15 +584,25 @@ export default function App() {
             </div>
           )}
 
-          {/* Launch button */}
-          <button
-            onClick={handleStartPipeline}
-            disabled={isPipelineRunning || !selectedConfig || !selectedSvo}
-            className="w-full bg-green-700 hover:bg-green-600 disabled:bg-gray-700 rounded-xl
-                       py-2.5 text-sm font-medium transition-colors"
-          >
-            {isPipelineRunning ? 'Processing…' : 'Launch Pipeline'}
-          </button>
+          {/* Launch / Kill buttons */}
+          <div className="flex gap-2">
+            <button
+              onClick={handleStartPipeline}
+              disabled={isPipelineRunning || !selectedConfig || !selectedSvo}
+              className="flex-1 bg-green-700 hover:bg-green-600 disabled:bg-gray-700 rounded-xl
+                         py-2.5 text-sm font-medium transition-colors"
+            >
+              {isPipelineRunning ? 'Processing…' : 'Launch Pipeline'}
+            </button>
+            {isPipelineRunning && (
+              <button
+                onClick={handleKillPipeline}
+                className="bg-red-800 hover:bg-red-700 rounded-xl px-4 text-sm font-medium transition-colors"
+              >
+                Kill
+              </button>
+            )}
+          </div>
 
           {/* Log console */}
           {logs.length > 0 && (

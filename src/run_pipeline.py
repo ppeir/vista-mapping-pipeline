@@ -33,9 +33,6 @@ import time
 import zipfile
 from pathlib import Path
 
-from rich.console import Group
-from rich.live import Live
-from rich.text import Text
 
 try:
     import yaml as _yaml
@@ -56,63 +53,50 @@ def run(cmd: list[str], description: str) -> None:
 
 
 def run_parallel(jobs: list[tuple[list[str], str]]) -> None:
-    """Launch subprocesses in parallel; update output in-place using rich."""
-    n = len(jobs)
+    """Launch subprocesses in parallel; stream each output line prefixed with [label]."""
+    labels = [desc.split("→")[-1].strip() for _, desc in jobs]
     procs: list[subprocess.Popen] = []
-    status_state: dict[int, str] = {i: "starting..." for i in range(n)}
-    labels = [desc.split("→")[-1].strip()[:18] for _, desc in jobs]
 
     for cmd, description in jobs:
-        print(f"\n{'='*60}\n  {description} [parallel]\n{'='*60}")
+        print(f"\n{'='*60}\n  {description} [parallel]\n{'='*60}", flush=True)
         procs.append(subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
         ))
 
-    def reader(idx: int, pipe) -> None:
-        buffer = bytearray()
+    def reader(label: str, pipe) -> None:
+        buf = bytearray()
         try:
             while True:
                 char = pipe.read(1)
                 if not char:
-                    if buffer:
-                        status_state[idx] = buffer.decode('utf-8', errors='replace').strip()
+                    if buf:
+                        text = buf.decode("utf-8", errors="replace").strip()
+                        if text:
+                            print(f"[{label}] {text}", flush=True)
                     break
-                if char in (b'\r', b'\n'):
-                    if buffer:
-                        status_state[idx] = buffer.decode('utf-8', errors='replace').strip()
-                        buffer.clear()
+                if char in (b"\n", b"\r"):
+                    text = buf.decode("utf-8", errors="replace").strip()
+                    if text:
+                        print(f"[{label}] {text}", flush=True)
+                    buf.clear()
                 else:
-                    buffer.extend(char)
+                    buf.extend(char)
         finally:
             pipe.close()
 
     threads = [
-        threading.Thread(target=reader, args=(i, p.stdout), daemon=True)
-        for i, p in enumerate(procs)
+        threading.Thread(target=reader, args=(labels[i], procs[i].stdout), daemon=True)
+        for i in range(len(procs))
     ]
     for t in threads:
         t.start()
-
-    def render_status() -> Group:
-        return Group(*[
-            Text(f"  [{labels[i]:<18}]  {status_state[i]}")
-            for i in range(n)
-        ])
-
-    print()
-    with Live(render_status(), refresh_per_second=10) as live:
-        while any(p.poll() is None for p in procs):
-            live.update(render_status())
-            time.sleep(0.1)
-        live.update(render_status())
-
     for t in threads:
         t.join()
 
-    for i in range(n):
+    for i, (_, desc) in enumerate(jobs):
         rc = procs[i].returncode
         tag = "OK" if rc == 0 else f"FAILED exit={rc}"
-        print(f"  [{labels[i]:<18}]  [{tag}]")
+        print(f"  [{labels[i]}]  [{tag}]", flush=True)
 
     failed = [
         (procs[i].returncode, desc)
@@ -121,7 +105,7 @@ def run_parallel(jobs: list[tuple[list[str], str]]) -> None:
     ]
     if failed:
         for code, description in failed:
-            print(f"\n[ERROR] Failed (exit {code}): {description}", file=sys.stderr)
+            print(f"\n[ERROR] Failed (exit {code}): {description}", file=sys.stderr, flush=True)
         sys.exit(failed[0][0])
 
 

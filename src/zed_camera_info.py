@@ -53,8 +53,7 @@ def extract_intrinsics_from_svo(svo_path, output_json_path="camera_info.json", d
     # Save camera_info.json
     with open(output_json_path, "w") as f:
         json.dump(data, f, indent=2)
-    print(f"Saved: {output_json_path}")
-    print(json.dumps(data, indent=2))
+    print(f"Saved: {output_json_path}  ({width}x{height}, fx={calib.fx:.1f})")
 
     # Save depth_camera_info.json with scale factor applied to intrinsics
     depth_data = {
@@ -73,7 +72,6 @@ def extract_intrinsics_from_svo(svo_path, output_json_path="camera_info.json", d
     with open(depth_json_path, "w") as f:
         json.dump(depth_data, f, indent=2)
     print(f"Saved: {depth_json_path}")
-    print(json.dumps(depth_data, indent=2))
 
     # Close camera
     zed.close()
